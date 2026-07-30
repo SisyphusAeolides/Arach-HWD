@@ -268,15 +268,19 @@ quarantine_seconds = 900
 "#
     }
 
-    fn keyring(signing: &SigningKey, revoked: bool) -> (String, Keyring) {
+    fn keyring_with_scope(signing: &SigningKey, revoked: bool, scope: &str) -> (String, Keyring) {
         let public = signing.verifying_key().to_bytes();
         let id = key_id(&public);
         let keyring = Keyring::from_toml(&format!(
-            "[[key]]\nid = \"{id}\"\npublic_key = \"{}\"\nscope = \"hardware-profile\"\nrevoked = {revoked}\n",
-            encode(&public)
+            "[[key]]\nid = \"{id}\"\npublic_key = \"{}\"\nscope = \"{scope}\"\nrevoked = {revoked}\n",
+            encode(&public),
         ))
         .unwrap();
         (id, keyring)
+    }
+
+    fn keyring(signing: &SigningKey, revoked: bool) -> (String, Keyring) {
+        keyring_with_scope(signing, revoked, "hardware-profile")
     }
 
     fn signed_profile(signing: &SigningKey, id: &str) -> (Vec<u8>, String) {
@@ -330,6 +334,26 @@ quarantine_seconds = 900
         assert_eq!(
             keyring.verify(&profile, &signature),
             Err(SignatureError::UnknownKey)
+        );
+    }
+
+    #[test]
+    fn arbitrary_payloads_require_the_package_index_scope() {
+        let signing = SigningKey::from_bytes(&[10_u8; 32]);
+        let (id, keyring) = keyring_with_scope(&signing, false, "package-index");
+        let payload = b"signed package index";
+        let signature = signing.sign(payload);
+        let signature = format!(
+            "key_id = \"{id}\"\nsignature = \"{}\"\n",
+            encode(&signature.to_bytes())
+        );
+        assert_eq!(
+            keyring.verify_payload(payload, &signature, "package-index"),
+            Ok(id)
+        );
+        assert_eq!(
+            keyring.verify_payload(payload, &signature, "hardware-profile"),
+            Err(SignatureError::InvalidKeyScope)
         );
     }
 
