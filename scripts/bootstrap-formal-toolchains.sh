@@ -49,7 +49,4 @@ if [[ ! -x "$agda_root/agda" ]]; then
     trap - EXIT
 fi
 
-IDRIS2="$idris_root/build/exec/idris2" \
-IDRIS2_PATH="$idris_root/libs/prelude/build/ttc:$idris_root/libs/base/build/ttc" \
-AGDA="$agda_root/agda" \
-    "$root/scripts/check-formal-models.sh"
+printf '%s\n' "formal toolchains ready under $tools"
