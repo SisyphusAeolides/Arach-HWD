@@ -34,6 +34,7 @@ struct SignatureRecord {
 pub struct TrustedKey {
     pub id: String,
     pub public_key: [u8; 32],
+    pub scope: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -47,6 +48,7 @@ pub enum SignatureError {
     InvalidKeyring,
     InvalidKey,
     InvalidKeyId,
+    InvalidKeyScope,
     DuplicateKey,
     DuplicateProfile(String),
     UnknownKey,
@@ -68,7 +70,7 @@ impl Keyring {
         let file: KeyFile = toml::from_str(text).map_err(|_| SignatureError::InvalidKeyring)?;
         let mut keys = BTreeMap::new();
         for record in file.key {
-            if record.scope != "hardware-profile" {
+            if !matches!(record.scope.as_str(), "hardware-profile" | "package-index") {
                 return Err(SignatureError::InvalidKeyring);
             }
             if record.revoked {
@@ -81,6 +83,7 @@ impl Keyring {
             let key = TrustedKey {
                 id: record.id.clone(),
                 public_key: bytes,
+                scope: record.scope,
             };
             if keys.insert(record.id, key).is_some() {
                 return Err(SignatureError::DuplicateKey);
@@ -100,20 +103,8 @@ impl Keyring {
         profile_bytes: &[u8],
         signature_text: &str,
     ) -> Result<VerifiedProfile, SignatureError> {
-        let record: SignatureRecord =
-            toml::from_str(signature_text).map_err(|_| SignatureError::InvalidSignatureRecord)?;
-        let key = self
-            .keys
-            .get(&record.key_id)
-            .ok_or(SignatureError::UnknownKey)?;
-        let verifying_key =
-            VerifyingKey::from_bytes(&key.public_key).map_err(|_| SignatureError::InvalidKey)?;
-        let signature_bytes =
-            decode_array::<64>(&record.signature).ok_or(SignatureError::InvalidSignatureRecord)?;
-        let signature = Signature::from_bytes(&signature_bytes);
-        verifying_key
-            .verify_strict(profile_bytes, &signature)
-            .map_err(|_| SignatureError::SignatureMismatch)?;
+        let key_id = self.verify_payload(profile_bytes, signature_text, "hardware-profile")?;
+        let key = self.keys.get(&key_id).ok_or(SignatureError::UnknownKey)?;
         let profile: HardwareProfile = toml::from_slice(profile_bytes)
             .map_err(|error| SignatureError::InvalidProfile(error.to_string()))?;
         profile
@@ -124,6 +115,35 @@ impl Keyring {
             key_id: key.id.clone(),
             profile_sha256: encode(&Sha256::digest(profile_bytes)),
         })
+    }
+
+    /// Verify an arbitrary signed payload under a specifically scoped key.
+    /// Package indexes use this path; hardware profiles continue to use
+    /// `verify`, which additionally validates their typed profile schema.
+    pub fn verify_payload(
+        &self,
+        payload: &[u8],
+        signature_text: &str,
+        expected_scope: &str,
+    ) -> Result<String, SignatureError> {
+        let record: SignatureRecord =
+            toml::from_str(signature_text).map_err(|_| SignatureError::InvalidSignatureRecord)?;
+        let key = self
+            .keys
+            .get(&record.key_id)
+            .ok_or(SignatureError::UnknownKey)?;
+        if key.scope != expected_scope {
+            return Err(SignatureError::InvalidKeyScope);
+        }
+        let verifying_key =
+            VerifyingKey::from_bytes(&key.public_key).map_err(|_| SignatureError::InvalidKey)?;
+        let signature_bytes =
+            decode_array::<64>(&record.signature).ok_or(SignatureError::InvalidSignatureRecord)?;
+        let signature = Signature::from_bytes(&signature_bytes);
+        verifying_key
+            .verify_strict(payload, &signature)
+            .map_err(|_| SignatureError::SignatureMismatch)?;
+        Ok(key.id.clone())
     }
 }
 
