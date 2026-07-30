@@ -1,0 +1,29 @@
+[package]
+name = "arach-hwd"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.85"
+repository = "https://github.com/SisyphusAeolides/Arach-HWD"
+description = "Signed hardware profile resolver and Corinth transaction planner for Arach OS"
+build = "build.rs"
+
+[features]
+default = []
+fortran-ranking = []
+
+[dependencies]
+ed25519-dalek = "=3.0.0"
+serde = { version = "=1.0.229", features = ["derive"] }
+sha2 = "=0.10.9"
+toml = "=0.9.12"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "arach-hwd"
+path = "src/main.rs"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
