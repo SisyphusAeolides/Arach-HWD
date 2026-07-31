@@ -1230,15 +1230,19 @@ fn annotate_linux_firmware_files(
     let mut roots = firmware_roots.to_vec();
     roots.sort();
     roots.dedup();
-    for root in &roots {
-        let metadata = fs::symlink_metadata(root)?;
-        if !metadata.is_dir() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("firmware root is not a directory: {}", root.display()),
-            ));
-        }
-    }
+    let canonical_roots = roots
+        .iter()
+        .map(|root| {
+            let metadata = fs::symlink_metadata(root)?;
+            if !metadata.is_dir() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("firmware root is not a directory: {}", root.display()),
+                ));
+            }
+            fs::canonicalize(root)
+        })
+        .collect::<io::Result<Vec<_>>>()?;
 
     for device in devices {
         let Some(value) = device.properties.get("linux_firmware_candidates") else {
@@ -1250,11 +1254,11 @@ fn annotate_linux_firmware_files(
             .collect::<BTreeSet<_>>();
         let mut files = BTreeSet::new();
         for candidate in candidates {
-            for root in &roots {
+            for (root, canonical_root) in roots.iter().zip(&canonical_roots) {
                 for suffix in ["", ".xz", ".zst", ".gz", ".bz2", ".lz4", ".lz"] {
                     let path = root.join(format!("{candidate}{suffix}"));
-                    if is_regular_non_symlink(&path) {
-                        files.insert(format!("{candidate}={}", path.display()));
+                    if let Some(resolved) = resolve_firmware_file(canonical_root, &path) {
+                        files.insert(format!("{candidate}={}", resolved.display()));
                     }
                 }
             }
@@ -1270,6 +1274,23 @@ fn annotate_linux_firmware_files(
         }
     }
     Ok(())
+}
+
+/// Firmware trees shipped by Linux distributions sometimes use an alias
+/// symlink for a board-specific blob. Accept only links that resolve to a
+/// regular file *inside the selected root*; a link escaping the root is not
+/// discovery evidence and is rejected. The canonical payload path is
+/// recorded so the installer and package builder hash the bytes that will be
+/// staged rather than an unstable alias name.
+fn resolve_firmware_file(root: &Path, candidate: &Path) -> Option<PathBuf> {
+    let resolved = fs::canonicalize(candidate).ok()?;
+    if !resolved.starts_with(&root) {
+        return None;
+    }
+    fs::metadata(&resolved)
+        .ok()
+        .filter(|metadata| metadata.is_file())
+        .map(|_| resolved)
 }
 
 fn read_modules_metadata(path: &Path, limit: u64, label: &str) -> io::Result<String> {
@@ -2209,6 +2230,61 @@ mod tests {
                 root.join("live-firmware").display(),
             ))
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn firmware_aliases_are_confined_to_the_selected_root() {
+        let root = scratch();
+        let pci = root.join("bus/pci/devices/0000:00:14.3");
+        let firmware_root = root.join("firmware");
+        let outside = root.join("outside.bin");
+        fs::create_dir_all(&pci).unwrap();
+        fs::create_dir_all(firmware_root.join("iwlwifi")).unwrap();
+        fs::write(pci.join("vendor"), "8086\n").unwrap();
+        fs::write(pci.join("device"), "2723\n").unwrap();
+        fs::write(
+            pci.join("modalias"),
+            "pci:v00008086d00002723sv00001028sd00000001bc02sc80i00\n",
+        )
+        .unwrap();
+        let aliases = root.join("modules.alias");
+        fs::write(&aliases, "alias pci:v00008086d00002723* iwlwifi\n").unwrap();
+        let modules_firmware = root.join("modules.firmware");
+        fs::write(
+            &modules_firmware,
+            "kernel/drivers/net/wireless/iwlwifi.ko: iwlwifi/board.bin iwlwifi/escape.bin\n",
+        )
+        .unwrap();
+        fs::write(firmware_root.join("iwlwifi/board.bin.xz"), b"payload").unwrap();
+        fs::write(&outside, b"outside").unwrap();
+        symlink("board.bin.xz", firmware_root.join("iwlwifi/board.bin")).unwrap();
+        symlink(&outside, firmware_root.join("iwlwifi/escape.bin")).unwrap();
+
+        let inventory = scan_inventory_with_driver_sources(
+            &root,
+            &[aliases],
+            &[modules_firmware],
+            &[],
+            &[],
+            &[firmware_root.clone()],
+        )
+        .unwrap();
+        let device = inventory
+            .devices
+            .iter()
+            .find(|device| device.key == "pci:0000:00:14.3")
+            .unwrap();
+        let firmware = device
+            .properties
+            .get("linux_firmware_files")
+            .cloned()
+            .unwrap_or_default();
+        assert!(firmware.contains(&format!(
+            "iwlwifi/board.bin={}",
+            firmware_root.join("iwlwifi/board.bin.xz").display()
+        )));
+        assert!(!firmware.contains("iwlwifi/escape.bin="));
         fs::remove_dir_all(root).unwrap();
     }
 

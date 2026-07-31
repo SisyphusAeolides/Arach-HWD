@@ -27,7 +27,9 @@ and kernel modalias. It may also include deterministic `modules.alias` driver
 matches and `modules.firmware` firmware names from one or more live/target
 kernel metadata sets, the exact metadata table that produced each candidate,
 plus exact module payload/dependency/builtin paths and firmware files found
-under the supplied live/target roots. Corinth uses the
+under the supplied live/target roots. Firmware aliases are followed only when
+they resolve to a regular file inside the selected root; the canonical payload
+path is retained and links that escape the root are rejected. Corinth uses the
 stable tuple plus that evidence to query the signed `arach-hardware` index.
 HWD does not translate `wlan0`,
 `card0`, or a driver name into a package because that would make hardware

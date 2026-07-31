@@ -79,9 +79,12 @@ firmware roots, target `/run/arach/target/{lib,usr/lib}/firmware`, and staged
 `/mnt`, `/target`, `/sysroot`, `/run/live/medium`, and `/run/archiso/bootmnt`
 firmware roots. Exact matches are recorded in
 `linux_firmware_files`; the preflight report carries those exact driver and
-firmware paths for each unresolved device. A missing firmware file remains
-unresolved rather than being treated as available merely because a module
-metadata line names it.
+firmware paths for each unresolved device. Distribution firmware trees often
+use board aliases, so HWD resolves a symlink only when it stays inside the
+selected firmware root and targets a regular file; the canonical payload path
+is recorded. A missing firmware file remains unresolved rather than being
+treated as available merely because a module metadata line names it, and a
+link that escapes the root is never followed.
 Repeat the metadata options to provide an explicit live/target table set
 (explicit table paths must be regular files), or repeat `--firmware-root` with
 firmware directories. The tables only provide candidate evidence; signed
