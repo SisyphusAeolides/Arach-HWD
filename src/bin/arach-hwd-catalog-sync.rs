@@ -12,14 +12,9 @@ fn main() {
 fn run(arguments: Vec<String>) -> Result<(), String> {
     let flags = parse_flags(&arguments)?;
     if flags.len() != 4
-        || ![
-            "manifest-url",
-            "signature-url",
-            "keyring",
-            "output",
-        ]
-        .iter()
-        .all(|name| flags.contains_key(*name))
+        || !["manifest-url", "signature-url", "keyring", "output"]
+            .iter()
+            .all(|name| flags.contains_key(*name))
     {
         return Err(usage());
     }
@@ -27,8 +22,8 @@ fn run(arguments: Vec<String>) -> Result<(), String> {
     let signature = text(&flags, "signature-url")?;
     let keyring = path(&flags, "keyring")?;
     let output = path(&flags, "output")?;
-    let synced = sync_catalog(manifest, signature, keyring, output)
-        .map_err(|error| error.to_string())?;
+    let synced =
+        sync_catalog(manifest, signature, keyring, output).map_err(|error| error.to_string())?;
     println!(
         "synced Arach hardware catalog snapshot {} to {}",
         synced.snapshot,
@@ -77,13 +72,15 @@ mod tests {
     #[test]
     fn rejects_unknown_duplicate_or_missing_flags() {
         assert!(run(vec!["--unknown".into(), "value".into()]).is_err());
-        assert!(parse_flags(&[
-            "--output".into(),
-            "/tmp/a".into(),
-            "--output".into(),
-            "/tmp/b".into(),
-        ])
-        .is_err());
+        assert!(
+            parse_flags(&[
+                "--output".into(),
+                "/tmp/a".into(),
+                "--output".into(),
+                "/tmp/b".into(),
+            ])
+            .is_err()
+        );
         assert!(run(Vec::new()).is_err());
     }
 

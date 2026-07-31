@@ -195,11 +195,9 @@ fn verify_staged_catalog(
     keyring
         .verify_payload(&package_index, &package_signature, "package-index")
         .map_err(|error| RepositoryError::Signature(error.to_string()))?;
-    let driver_abi = String::from_utf8(read_bounded(
-        &root.join("driver-abi"),
-        MAX_SIGNATURE_BYTES,
-    )?)
-    .map_err(|_| RepositoryError::Invalid("driver ABI is not UTF-8".into()))?;
+    let driver_abi =
+        String::from_utf8(read_bounded(&root.join("driver-abi"), MAX_SIGNATURE_BYTES)?)
+            .map_err(|_| RepositoryError::Invalid("driver ABI is not UTF-8".into()))?;
     if !valid_driver_abi(driver_abi.trim()) {
         return Err(RepositoryError::Invalid(
             "driver ABI must be MAJOR.MINOR".into(),
@@ -415,7 +413,9 @@ fn validate_https_url(value: &str) -> Result<(), RepositoryError> {
         || value.len() > 4096
         || value.contains('@')
         || value.contains('#')
-        || value.bytes().any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
+        || value
+            .bytes()
+            .any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
     {
         return Err(RepositoryError::Invalid(format!(
             "repository URL is not bounded HTTPS: {value}"
@@ -542,7 +542,8 @@ quarantine_seconds = 900
         .into_bytes();
         let profile = profile();
         let profile_signature = signature(&profile_signing, &profile).into_bytes();
-        let package_index = b"format = 1\nrepository = \"arach-hardware\"\nkey_id = \"fixture\"\n".to_vec();
+        let package_index =
+            b"format = 1\nrepository = \"arach-hardware\"\nkey_id = \"fixture\"\n".to_vec();
         let package_signature = signature(&package_signing, &package_index).into_bytes();
         let mut objects = BTreeMap::<String, Vec<u8>>::new();
         objects.insert("keys.toml".into(), keyring.clone());
@@ -601,11 +602,13 @@ quarantine_seconds = 900
         .unwrap();
         assert_eq!(result.snapshot, "remote-test");
         assert!(output.join("profiles/wifi.toml").is_file());
-        assert!(!root
-            .read_dir()
-            .unwrap()
-            .flatten()
-            .any(|entry| entry.file_name().to_string_lossy().contains(".tmp")));
+        assert!(
+            !root
+                .read_dir()
+                .unwrap()
+                .flatten()
+                .any(|entry| entry.file_name().to_string_lossy().contains(".tmp"))
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
