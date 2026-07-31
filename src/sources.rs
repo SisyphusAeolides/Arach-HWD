@@ -92,6 +92,14 @@ impl DriverSourceManifest {
                         .into(),
                 install_authority: false,
             },
+            DriverAuthority {
+                id: "linux-firmware-tree".into(),
+                kind: DriverSourceKind::FirmwareTree,
+                repository:
+                    "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git"
+                        .into(),
+                install_authority: false,
+            },
         ]
     }
 

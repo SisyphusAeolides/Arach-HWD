@@ -820,6 +820,7 @@ struct LinuxAlias {
     pattern: String,
     driver: String,
     literal_prefix: String,
+    source: PathBuf,
 }
 
 fn annotate_linux_driver_candidates(
@@ -829,14 +830,20 @@ fn annotate_linux_driver_candidates(
     let mut aliases = Vec::new();
     for path in modules_alias {
         let text = read_modules_metadata(path, MAX_MODULES_ALIAS_BYTES, "modules alias")?;
-        aliases.extend(parse_modules_alias(&text));
+        let mut parsed = parse_modules_alias(&text);
+        for alias in &mut parsed {
+            alias.source = path.clone();
+        }
+        aliases.extend(parsed);
     }
     aliases.sort_by(|left, right| {
         left.pattern
             .cmp(&right.pattern)
             .then_with(|| left.driver.cmp(&right.driver))
     });
-    aliases.dedup_by(|left, right| left.pattern == right.pattern && left.driver == right.driver);
+    aliases.dedup_by(|left, right| {
+        left.pattern == right.pattern && left.driver == right.driver && left.source == right.source
+    });
     for device in devices {
         if device.modalias.is_empty() {
             continue;
@@ -847,6 +854,17 @@ fn annotate_linux_driver_candidates(
             .filter(|alias| glob_matches(&alias.pattern, &device.modalias))
             .map(|alias| alias.driver.as_str())
             .collect::<BTreeSet<_>>();
+        let mut sources = BTreeMap::<String, BTreeSet<PathBuf>>::new();
+        for alias in aliases
+            .iter()
+            .filter(|alias| device.modalias.starts_with(&alias.literal_prefix))
+            .filter(|alias| glob_matches(&alias.pattern, &device.modalias))
+        {
+            sources
+                .entry(alias.driver.clone())
+                .or_default()
+                .insert(alias.source.clone());
+        }
         if candidates.len() > MAX_DRIVER_CANDIDATES {
             candidates = candidates.into_iter().take(MAX_DRIVER_CANDIDATES).collect();
         }
@@ -855,6 +873,26 @@ fn annotate_linux_driver_candidates(
                 "linux_driver_candidates".into(),
                 candidates.into_iter().collect::<Vec<_>>().join(","),
             );
+            let selected = device
+                .properties
+                .get("linux_driver_candidates")
+                .cloned()
+                .unwrap_or_default();
+            let encoded = sources
+                .into_iter()
+                .filter(|(driver, _)| selected.split(',').any(|candidate| candidate == driver))
+                .flat_map(|(driver, paths)| {
+                    paths
+                        .into_iter()
+                        .map(move |path| format!("{driver}={}", path.display()))
+                })
+                .take(MAX_DRIVER_FILES)
+                .collect::<Vec<_>>();
+            if !encoded.is_empty() {
+                device
+                    .properties
+                    .insert("linux_driver_candidate_sources".into(), encoded.join(","));
+            }
         }
     }
     Ok(())
@@ -879,26 +917,46 @@ fn annotate_linux_driver_files(
 ) -> io::Result<()> {
     let mut payloads = BTreeMap::<String, BTreeSet<String>>::new();
     let mut dependencies = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut payload_sources = BTreeMap::<String, BTreeSet<PathBuf>>::new();
+    let mut dependency_sources = BTreeMap::<String, BTreeSet<PathBuf>>::new();
     for path in modules_dep {
         let text = read_modules_metadata(path, MAX_MODULES_ALIAS_BYTES, "modules dependency")?;
         for payload in parse_modules_dep(&text) {
-            let module = payload.module;
+            let module = payload.module.clone();
+            let has_dependencies = !payload.dependencies.is_empty();
             payloads
                 .entry(module.clone())
                 .or_default()
                 .insert(payload.path);
-            if !payload.dependencies.is_empty() {
+            if has_dependencies {
                 dependencies
+                    .entry(module.clone())
+                    .or_default()
+                    .extend(payload.dependencies.iter().cloned());
+            }
+            payload_sources
+                .entry(module.clone())
+                .or_default()
+                .insert(path.clone());
+            if has_dependencies {
+                dependency_sources
                     .entry(module)
                     .or_default()
-                    .extend(payload.dependencies);
+                    .insert(path.clone());
             }
         }
     }
     let mut builtins = BTreeSet::new();
+    let mut builtin_sources = BTreeMap::<String, BTreeSet<PathBuf>>::new();
     for path in modules_builtin {
         let text = read_modules_metadata(path, MAX_MODULES_ALIAS_BYTES, "modules builtin")?;
-        builtins.extend(parse_modules_builtin(&text));
+        for module in parse_modules_builtin(&text) {
+            builtins.insert(module.clone());
+            builtin_sources
+                .entry(module)
+                .or_default()
+                .insert(path.clone());
+        }
     }
 
     for device in devices {
@@ -913,15 +971,15 @@ fn annotate_linux_driver_files(
         let mut files = BTreeMap::<String, BTreeSet<String>>::new();
         let mut dependency_files = BTreeMap::<String, BTreeSet<String>>::new();
         let mut builtin_candidates = BTreeSet::new();
-        for driver in drivers {
-            if let Some(paths) = payloads.get(&driver) {
+        for driver in &drivers {
+            if let Some(paths) = payloads.get(driver) {
                 files.insert(driver.clone(), paths.clone());
             }
-            if let Some(paths) = dependencies.get(&driver) {
+            if let Some(paths) = dependencies.get(driver) {
                 dependency_files.insert(driver.clone(), paths.clone());
             }
-            if builtins.contains(&driver) {
-                builtin_candidates.insert(driver);
+            if builtins.contains(driver) {
+                builtin_candidates.insert(driver.clone());
             }
         }
         if !files.is_empty() {
@@ -940,6 +998,32 @@ fn annotate_linux_driver_files(
                     .properties
                     .insert("linux_driver_files".into(), encoded);
             }
+        }
+        let encode_sources = |sources: &BTreeMap<String, BTreeSet<PathBuf>>| {
+            sources
+                .iter()
+                .filter(|(module, _)| drivers.contains(*module))
+                .flat_map(|(module, paths)| {
+                    paths
+                        .iter()
+                        .map(move |path| format!("{module}={}", path.display()))
+                })
+                .take(MAX_DRIVER_FILES)
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let payload_source_text = encode_sources(&payload_sources);
+        if !payload_source_text.is_empty() {
+            device
+                .properties
+                .insert("linux_driver_file_sources".into(), payload_source_text);
+        }
+        let dependency_source_text = encode_sources(&dependency_sources);
+        if !dependency_source_text.is_empty() {
+            device.properties.insert(
+                "linux_driver_dependency_sources".into(),
+                dependency_source_text,
+            );
         }
         if !dependency_files.is_empty() {
             let encoded = dependency_files
@@ -963,6 +1047,12 @@ fn annotate_linux_driver_files(
                 "linux_driver_builtins".into(),
                 builtin_candidates.into_iter().collect::<Vec<_>>().join(","),
             );
+            let builtin_source_text = encode_sources(&builtin_sources);
+            if !builtin_source_text.is_empty() {
+                device
+                    .properties
+                    .insert("linux_driver_builtin_sources".into(), builtin_source_text);
+            }
         }
     }
     Ok(())
@@ -1026,6 +1116,7 @@ fn valid_module_path(value: &str) -> bool {
 struct ModuleFirmware {
     module: String,
     firmware: Vec<String>,
+    sources: Vec<PathBuf>,
 }
 
 fn annotate_linux_firmware_candidates(
@@ -1033,18 +1124,25 @@ fn annotate_linux_firmware_candidates(
     modules_firmware: &[PathBuf],
 ) -> io::Result<()> {
     let mut record_map = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut source_map = BTreeMap::<String, BTreeSet<PathBuf>>::new();
     for path in modules_firmware {
         let text = read_modules_metadata(path, MAX_MODULES_FIRMWARE_BYTES, "modules firmware")?;
         for record in parse_modules_firmware(&text) {
+            let module = record.module;
             record_map
-                .entry(record.module)
+                .entry(module.clone())
                 .or_default()
                 .extend(record.firmware);
+            source_map.entry(module).or_default().insert(path.clone());
         }
     }
     let records = record_map
         .into_iter()
         .map(|(module, firmware)| ModuleFirmware {
+            sources: source_map
+                .get(&module)
+                .map(|paths| paths.iter().cloned().collect())
+                .unwrap_or_default(),
             module,
             firmware: firmware.into_iter().collect(),
         })
@@ -1060,6 +1158,7 @@ fn annotate_linux_firmware_candidates(
         }
 
         let mut firmware = BTreeSet::new();
+        let mut firmware_sources = BTreeSet::new();
         if let Some(value) = device.properties.get("firmware") {
             firmware.extend(
                 value
@@ -1071,6 +1170,9 @@ fn annotate_linux_firmware_candidates(
         for record in &records {
             if drivers.contains(&record.module) {
                 firmware.extend(record.firmware.iter().cloned());
+                for source in &record.sources {
+                    firmware_sources.insert(format!("{}={}", record.module, source.display()));
+                }
             }
         }
         if firmware.len() > MAX_FIRMWARE_CANDIDATES {
@@ -1080,6 +1182,12 @@ fn annotate_linux_firmware_candidates(
             device.properties.insert(
                 "linux_firmware_candidates".into(),
                 firmware.into_iter().collect::<Vec<_>>().join(","),
+            );
+        }
+        if !firmware_sources.is_empty() {
+            device.properties.insert(
+                "linux_firmware_candidate_sources".into(),
+                firmware_sources.into_iter().collect::<Vec<_>>().join(","),
             );
         }
     }
@@ -1179,6 +1287,7 @@ fn parse_modules_alias(text: &str) -> Vec<LinuxAlias> {
                 .take_while(|byte| !matches!(byte, b'*' | b'?'))
                 .map(char::from)
                 .collect(),
+            source: PathBuf::new(),
         });
     }
     aliases.sort_by(|left, right| {
@@ -1221,7 +1330,11 @@ fn parse_modules_firmware(text: &str) -> Vec<ModuleFirmware> {
             existing.firmware.sort();
             existing.firmware.dedup();
         } else {
-            records.push(ModuleFirmware { module, firmware });
+            records.push(ModuleFirmware {
+                module,
+                firmware,
+                sources: Vec::new(),
+            });
         }
     }
     records
@@ -1871,6 +1984,14 @@ mod tests {
             device.properties.get("linux_driver_candidates"),
             Some(&String::from("iwlwifi,zzz-driver"))
         );
+        assert_eq!(
+            device.properties.get("linux_driver_candidate_sources"),
+            Some(&format!(
+                "iwlwifi={},zzz-driver={}",
+                aliases.display(),
+                aliases.display()
+            ))
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1906,8 +2027,8 @@ mod tests {
 
         let inventory = scan_inventory_with_modules_metadata(
             &root,
-            &[live_aliases, target_aliases],
-            &[firmware, target_firmware],
+            &[live_aliases.clone(), target_aliases.clone()],
+            &[firmware.clone(), target_firmware.clone()],
         )
         .unwrap();
         let device = inventory
@@ -1920,9 +2041,26 @@ mod tests {
             Some(&String::from("ath12k,iwlwifi"))
         );
         assert_eq!(
+            device.properties.get("linux_driver_candidate_sources"),
+            Some(&format!(
+                "ath12k={},iwlwifi={}",
+                target_aliases.display(),
+                live_aliases.display()
+            ))
+        );
+        assert_eq!(
             device.properties.get("linux_firmware_candidates"),
             Some(&String::from(
                 "ath12k/test.bin,iwlwifi-a.bin,iwlwifi-c.bin,iwlwifi/iwlwifi-b.bin"
+            ))
+        );
+        assert_eq!(
+            device.properties.get("linux_firmware_candidate_sources"),
+            Some(&format!(
+                "ath12k={},iwlwifi={},iwlwifi={}",
+                firmware.display(),
+                firmware.display(),
+                target_firmware.display()
             ))
         );
         fs::remove_dir_all(root).unwrap();
@@ -1952,9 +2090,14 @@ mod tests {
         let builtin = root.join("modules.builtin");
         fs::write(&builtin, "kernel/drivers/net/wireless/iwlwifi.ko\n").unwrap();
 
-        let inventory =
-            scan_inventory_with_driver_metadata(&root, &[aliases], &[], &[deps], &[builtin])
-                .unwrap();
+        let inventory = scan_inventory_with_driver_metadata(
+            &root,
+            std::slice::from_ref(&aliases),
+            &[],
+            std::slice::from_ref(&deps),
+            std::slice::from_ref(&builtin),
+        )
+        .unwrap();
         let device = inventory
             .devices
             .iter()
@@ -1967,12 +2110,24 @@ mod tests {
             ))
         );
         assert_eq!(
+            device.properties.get("linux_driver_file_sources"),
+            Some(&format!("iwlwifi={}", deps.display()))
+        );
+        assert_eq!(
             device.properties.get("linux_driver_dependencies"),
             Some(&String::from("iwlwifi=kernel/drivers/core.ko"))
         );
         assert_eq!(
+            device.properties.get("linux_driver_dependency_sources"),
+            Some(&format!("iwlwifi={}", deps.display()))
+        );
+        assert_eq!(
             device.properties.get("linux_driver_builtins"),
             Some(&String::from("iwlwifi"))
+        );
+        assert_eq!(
+            device.properties.get("linux_driver_builtin_sources"),
+            Some(&format!("iwlwifi={}", builtin.display()))
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -2081,6 +2236,11 @@ mod tests {
                 .iter()
                 .any(|authority| authority.id == "arach-hardware" && authority.install_authority)
         );
+        assert!(sources.authorities.iter().any(|authority| {
+            authority.id == "linux-firmware-tree"
+                && authority.kind == DriverSourceKind::FirmwareTree
+                && !authority.install_authority
+        }));
         let metadata = sources
             .evidence
             .iter()

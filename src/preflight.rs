@@ -24,22 +24,41 @@ pub struct UnresolvedDevice {
     /// an install and are not substituted for a signed Arach profile.
     #[serde(default)]
     pub candidate_drivers: Vec<String>,
+    /// Exact modules.alias tables that produced each candidate
+    /// (module=/absolute/path). This keeps live and target release evidence
+    /// distinguishable when both are present.
+    #[serde(default)]
+    pub candidate_driver_sources: Vec<String>,
     /// Firmware names advertised by the matching Linux modules.firmware table
     /// (plus any sysfs FIRMWARE request).  These are lookup evidence only;
     /// Corinth still requires an exact signed firmware intent.
     #[serde(default)]
     pub candidate_firmware: Vec<String>,
+    /// Exact modules.firmware tables that produced each firmware candidate
+    /// (module=/absolute/path).
+    #[serde(default)]
+    pub candidate_firmware_sources: Vec<String>,
     /// Exact module payload paths matched by the supplied `modules.dep`
     /// tables.  These remain evidence until a signed package intent binds
     /// them to the target Arach kernel.
     #[serde(default)]
     pub candidate_driver_files: Vec<String>,
+    /// Exact modules.dep table that produced each payload candidate
+    /// (module=/absolute/path).
+    #[serde(default)]
+    pub candidate_driver_file_sources: Vec<String>,
     /// Exact dependency paths required by each candidate module.
     #[serde(default)]
     pub candidate_driver_dependencies: Vec<String>,
+    /// Exact modules.dep table that produced each dependency candidate.
+    #[serde(default)]
+    pub candidate_driver_dependency_sources: Vec<String>,
     /// Candidate modules already built into a supplied target kernel.
     #[serde(default)]
     pub candidate_driver_builtins: Vec<String>,
+    /// Exact modules.builtin table that recorded each built-in candidate.
+    #[serde(default)]
+    pub candidate_driver_builtin_sources: Vec<String>,
     /// Exact firmware paths found under the supplied live/target firmware
     /// roots, including compressed payloads.
     #[serde(default)]
@@ -92,6 +111,7 @@ pub fn preflight_inventory(inventory: &Inventory) -> PreflightReport {
                             .collect()
                     })
                     .unwrap_or_default(),
+                candidate_driver_sources: property_values(device, "linux_driver_candidate_sources"),
                 candidate_firmware: device
                     .properties
                     .get("linux_firmware_candidates")
@@ -103,9 +123,22 @@ pub fn preflight_inventory(inventory: &Inventory) -> PreflightReport {
                             .collect()
                     })
                     .unwrap_or_default(),
+                candidate_firmware_sources: property_values(
+                    device,
+                    "linux_firmware_candidate_sources",
+                ),
                 candidate_driver_files: property_values(device, "linux_driver_files"),
+                candidate_driver_file_sources: property_values(device, "linux_driver_file_sources"),
                 candidate_driver_dependencies: property_values(device, "linux_driver_dependencies"),
+                candidate_driver_dependency_sources: property_values(
+                    device,
+                    "linux_driver_dependency_sources",
+                ),
                 candidate_driver_builtins: property_values(device, "linux_driver_builtins"),
+                candidate_driver_builtin_sources: property_values(
+                    device,
+                    "linux_driver_builtin_sources",
+                ),
                 candidate_firmware_files: property_values(device, "linux_firmware_files"),
             });
         }
@@ -168,12 +201,24 @@ mod tests {
                     String::from("iwlwifi,ath12k"),
                 ),
                 (
+                    String::from("linux_driver_candidate_sources"),
+                    String::from("iwlwifi=/lib/modules/6.12/modules.alias"),
+                ),
+                (
                     String::from("linux_firmware_candidates"),
                     String::from("iwlwifi-a.bin,ath12k/test.bin"),
                 ),
                 (
+                    String::from("linux_firmware_candidate_sources"),
+                    String::from("iwlwifi=/lib/modules/6.12/modules.firmware"),
+                ),
+                (
                     String::from("linux_driver_files"),
                     String::from("iwlwifi=kernel/drivers/net/iwlwifi.ko.xz"),
+                ),
+                (
+                    String::from("linux_driver_file_sources"),
+                    String::from("iwlwifi=/lib/modules/6.12/modules.dep"),
                 ),
                 (
                     String::from("linux_firmware_files"),
@@ -202,12 +247,24 @@ mod tests {
             vec!["iwlwifi".to_owned(), "ath12k".to_owned()]
         );
         assert_eq!(
+            report.unresolved[0].candidate_driver_sources,
+            vec!["iwlwifi=/lib/modules/6.12/modules.alias".to_owned()]
+        );
+        assert_eq!(
             report.unresolved[0].candidate_firmware,
             vec!["iwlwifi-a.bin".to_owned(), "ath12k/test.bin".to_owned()]
         );
         assert_eq!(
+            report.unresolved[0].candidate_firmware_sources,
+            vec!["iwlwifi=/lib/modules/6.12/modules.firmware".to_owned()]
+        );
+        assert_eq!(
             report.unresolved[0].candidate_driver_files,
             vec!["iwlwifi=kernel/drivers/net/iwlwifi.ko.xz".to_owned()]
+        );
+        assert_eq!(
+            report.unresolved[0].candidate_driver_file_sources,
+            vec!["iwlwifi=/lib/modules/6.12/modules.dep".to_owned()]
         );
         assert_eq!(
             report.unresolved[0].candidate_firmware_files,

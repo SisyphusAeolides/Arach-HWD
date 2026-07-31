@@ -1,6 +1,6 @@
 # Corinth provisioning boundary
 
-Arach HWD emits inventory schema 4, preflight report schema 5, and plan schema
+Arach HWD emits inventory schema 5, preflight report schema 6, and plan schema
 1. The Calamares medium must carry a signed profile catalog, its scoped
 keyring, a catalog lock marker, and the running Driver ABI. An inventory or
 preflight report is discovery evidence only; a plan is immutable input to
@@ -25,8 +25,9 @@ audio, graphics, storage, input, Bluetooth, and firmware. Each unresolved
 physical device carries its stable key, bus, vendor/product/class identity,
 and kernel modalias. It may also include deterministic `modules.alias` driver
 matches and `modules.firmware` firmware names from one or more live/target
-kernel metadata sets, plus exact module payload/dependency/builtin paths and
-firmware files found under the supplied live/target roots. Corinth uses the
+kernel metadata sets, the exact metadata table that produced each candidate,
+plus exact module payload/dependency/builtin paths and firmware files found
+under the supplied live/target roots. Corinth uses the
 stable tuple plus that evidence to query the signed `arach-hardware` index.
 HWD does not translate `wlan0`,
 `card0`, or a driver name into a package because that would make hardware
