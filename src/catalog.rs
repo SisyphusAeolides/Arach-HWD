@@ -309,16 +309,20 @@ fn sha256(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static SCRATCH_SERIAL: AtomicU64 = AtomicU64::new(1);
 
     fn scratch() -> PathBuf {
         std::env::temp_dir().join(format!(
-            "arach-catalog-{}-{}",
+            "arach-catalog-{}-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            SCRATCH_SERIAL.fetch_add(1, Ordering::Relaxed)
         ))
     }
 

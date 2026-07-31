@@ -6,6 +6,7 @@ pub mod health;
 pub mod plan;
 pub mod preflight;
 pub mod profile;
+pub mod repository;
 pub mod scan;
 pub mod signature;
 pub mod sources;
@@ -17,6 +18,10 @@ pub use health::{HealthEvidence, RecoveryDisposition, assess_recovery};
 pub use plan::{ProvisionPlan, build_plan};
 pub use preflight::{PREFLIGHT_SCHEMA, PreflightReport, UnresolvedDevice, preflight_inventory};
 pub use profile::{HardwareProfile, ResolveError, VerifiedProfile, resolve};
+pub use repository::{
+    REPOSITORY_FORMAT, RepositoryError, RepositoryManifest, RepositoryObject, sync_catalog,
+    sync_catalog_with_fetcher,
+};
 pub use scan::{
     default_firmware_roots, default_modules_alias, default_modules_aliases,
     default_modules_builtin_files, default_modules_dep_files, default_modules_firmware,
