@@ -58,10 +58,11 @@ table under `/lib/modules`, `/usr/lib/modules`, `/run/arach/target-modules`,
 and staged `/mnt` module roots, including the running kernel's release
 directory. This deterministic union lets a Calamares medium compare its live
 Linux drivers with target-kernel metadata without depending on boot order. The
-inventory properties `linux_driver_files` and `linux_driver_builtins` preserve
-the target module payload evidence so Wi-Fi, audio, graphics, storage, input,
-and Bluetooth profiles can be audited against exact files rather than a class
-name or the live kernel's current binding.
+inventory properties `linux_driver_files`, `linux_driver_dependencies`, and
+`linux_driver_builtins` preserve the target module payload evidence so Wi-Fi,
+audio, graphics, storage, input, and Bluetooth profiles can be audited against
+exact files and dependencies rather than a class name or the live kernel's
+current binding.
 Repeat either option to provide an explicit live/target set (explicit paths
 must be regular files). The tables only provide candidate evidence; signed
 Arach profiles and the package index remain the authority. `preflight` emits a signed-repository query

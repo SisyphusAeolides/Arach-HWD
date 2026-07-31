@@ -721,6 +721,7 @@ fn annotate_linux_driver_candidates(
 struct ModulePayload {
     module: String,
     path: String,
+    dependencies: Vec<String>,
 }
 
 /// Bind modalias candidates to the exact module payloads advertised by every
@@ -734,13 +735,21 @@ fn annotate_linux_driver_files(
     modules_builtin: &[PathBuf],
 ) -> io::Result<()> {
     let mut payloads = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut dependencies = BTreeMap::<String, BTreeSet<String>>::new();
     for path in modules_dep {
         let text = read_modules_metadata(path, MAX_MODULES_ALIAS_BYTES, "modules dependency")?;
         for payload in parse_modules_dep(&text) {
+            let module = payload.module;
             payloads
-                .entry(payload.module)
+                .entry(module.clone())
                 .or_default()
                 .insert(payload.path);
+            if !payload.dependencies.is_empty() {
+                dependencies
+                    .entry(module)
+                    .or_default()
+                    .extend(payload.dependencies);
+            }
         }
     }
     let mut builtins = BTreeSet::new();
@@ -759,10 +768,14 @@ fn annotate_linux_driver_files(
         }
 
         let mut files = BTreeMap::<String, BTreeSet<String>>::new();
+        let mut dependency_files = BTreeMap::<String, BTreeSet<String>>::new();
         let mut builtin_candidates = BTreeSet::new();
         for driver in drivers {
             if let Some(paths) = payloads.get(&driver) {
                 files.insert(driver.clone(), paths.clone());
+            }
+            if let Some(paths) = dependencies.get(&driver) {
+                dependency_files.insert(driver.clone(), paths.clone());
             }
             if builtins.contains(&driver) {
                 builtin_candidates.insert(driver);
@@ -785,6 +798,23 @@ fn annotate_linux_driver_files(
                     .insert("linux_driver_files".into(), encoded);
             }
         }
+        if !dependency_files.is_empty() {
+            let encoded = dependency_files
+                .into_iter()
+                .flat_map(|(module, paths)| {
+                    paths
+                        .into_iter()
+                        .map(move |path| format!("{module}={path}"))
+                })
+                .take(MAX_DRIVER_FILES)
+                .collect::<Vec<_>>()
+                .join(",");
+            if !encoded.is_empty() {
+                device
+                    .properties
+                    .insert("linux_driver_dependencies".into(), encoded);
+            }
+        }
         if !builtin_candidates.is_empty() {
             device.properties.insert(
                 "linux_driver_builtins".into(),
@@ -798,16 +828,22 @@ fn annotate_linux_driver_files(
 fn parse_modules_dep(text: &str) -> Vec<ModulePayload> {
     let mut records = Vec::new();
     for line in text.lines() {
-        let Some((module_path, _dependencies)) = line.split_once(':') else {
+        let Some((module_path, dependency_paths)) = line.split_once(':') else {
             continue;
         };
         let module_path = module_path.trim();
         if !valid_module_path(module_path) {
             continue;
         }
+        let dependencies = dependency_paths
+            .split_ascii_whitespace()
+            .filter(|path| valid_module_path(path))
+            .map(ToOwned::to_owned)
+            .collect();
         records.push(ModulePayload {
             module: canonical_module_name(module_path),
             path: module_path.to_owned(),
+            dependencies,
         });
     }
     records.sort_by(|left, right| {
@@ -1731,6 +1767,10 @@ mod tests {
             Some(&String::from(
                 "iwlwifi=kernel/drivers/net/wireless/iwlwifi.ko.xz"
             ))
+        );
+        assert_eq!(
+            device.properties.get("linux_driver_dependencies"),
+            Some(&String::from("iwlwifi=kernel/drivers/core.ko"))
         );
         assert_eq!(
             device.properties.get("linux_driver_builtins"),
