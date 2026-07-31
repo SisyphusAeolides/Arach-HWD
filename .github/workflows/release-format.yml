@@ -1,0 +1,35 @@
+name: Remote catalog release validation
+
+on:
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: write
+
+jobs:
+  format-and-verify:
+    if: github.head_ref == 'remote-catalog'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: remote-catalog
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - run: cargo fmt --all
+      - run: cargo check --locked --all-targets
+      - run: cargo test --locked
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked --features fortran-ranking
+      - run: git diff --check
+      - name: Publish verified sources
+        run: |
+          git rm .github/workflows/release-format.yml
+          git config user.name "SisyphusAeolides"
+          git config user.email "SisyphusAeolides@users.noreply.github.com"
+          git add -A
+          git commit -m "Format remote catalog sources"
+          git push origin HEAD:remote-catalog
