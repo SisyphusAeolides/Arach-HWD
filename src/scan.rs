@@ -1284,7 +1284,7 @@ fn annotate_linux_firmware_files(
 /// staged rather than an unstable alias name.
 fn resolve_firmware_file(root: &Path, candidate: &Path) -> Option<PathBuf> {
     let resolved = fs::canonicalize(candidate).ok()?;
-    if !resolved.starts_with(&root) {
+    if !resolved.starts_with(root) {
         return None;
     }
     fs::metadata(&resolved)
@@ -2267,7 +2267,7 @@ mod tests {
             &[modules_firmware],
             &[],
             &[],
-            &[firmware_root.clone()],
+            std::slice::from_ref(&firmware_root),
         )
         .unwrap();
         let device = inventory
