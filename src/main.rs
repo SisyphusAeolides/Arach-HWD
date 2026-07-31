@@ -2,7 +2,7 @@ use arach_hwd::catalog::verify_catalog;
 use arach_hwd::plan::{PLAN_SCHEMA, PlanSet};
 use arach_hwd::preflight::{PREFLIGHT_SCHEMA, preflight_inventory};
 use arach_hwd::profile::resolve;
-use arach_hwd::scan::{INVENTORY_SCHEMA, scan_inventory};
+use arach_hwd::scan::{INVENTORY_SCHEMA, scan_inventory, target_profile_required};
 use arach_hwd::signature::{Keyring, load_profiles};
 use std::collections::BTreeSet;
 use std::env;
@@ -86,7 +86,8 @@ fn plan_command(arguments: &[String]) -> Result<(), String> {
     let driver_abi = option(arguments, "--driver-abi")?
         .ok_or_else(|| "plan requires --driver-abi MAJOR.MINOR".to_owned())?;
     let output_path = option(arguments, "--output")?;
-    reject_unknown(
+    let require_target_profiles = has_flag(arguments, "--require-target-profiles")?;
+    reject_unknown_with_flags(
         arguments,
         &[
             "--sysfs",
@@ -96,6 +97,7 @@ fn plan_command(arguments: &[String]) -> Result<(), String> {
             "--driver-abi",
             "--output",
         ],
+        &["--require-target-profiles"],
     )?;
     let inventory = scan_inventory(&PathBuf::from(sysfs)).map_err(|error| error.to_string())?;
     verify_catalog(
@@ -122,6 +124,25 @@ fn plan_command(arguments: &[String]) -> Result<(), String> {
                 arach_hwd::build_plan(profile, device, &driver_abi)
                     .map_err(|error| error.to_string())?,
             );
+        }
+    }
+    if require_target_profiles {
+        for device in inventory
+            .devices
+            .iter()
+            .filter(|device| target_profile_required(device))
+        {
+            if resolve(&inventory.system, device, &profiles)
+                .map_err(|error| error.to_string())?
+                .is_none()
+            {
+                return Err(format!(
+                    "no signed target hardware profile matches physical device {} (bus {}, modalias {})",
+                    device.key,
+                    device.bus.name(),
+                    device.modalias
+                ));
+            }
         }
     }
     for device_key in unresolved {
@@ -224,5 +245,5 @@ fn has_flag(arguments: &[String], name: &str) -> Result<bool, String> {
 }
 
 fn usage() -> String {
-    "usage: arach-hwd scan [--sysfs ROOT] | arach-hwd preflight [--sysfs ROOT] [--output FILE] [--allow-unresolved] | arach-hwd plan --profiles DIR --keyring FILE --catalog-lock FILE --driver-abi MAJOR.MINOR [--sysfs ROOT] [--output FILE]".into()
+    "usage: arach-hwd scan [--sysfs ROOT] | arach-hwd preflight [--sysfs ROOT] [--output FILE] [--allow-unresolved] | arach-hwd plan --profiles DIR --keyring FILE --catalog-lock FILE --driver-abi MAJOR.MINOR [--sysfs ROOT] [--output FILE] [--require-target-profiles]".into()
 }

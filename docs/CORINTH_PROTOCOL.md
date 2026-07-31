@@ -28,6 +28,14 @@ name into a package because that would make hardware activation
 non-reproducible. Virtual interfaces and child class nodes are excluded from
 the unresolved set; their parent device is the package boundary.
 
+For an installation targeting Arach Kernel, Calamares invokes
+`arach-hwd plan --require-target-profiles`. That mode does not trust a driver
+bound by the temporary live Linux kernel: every physical bus function with a
+hardware capability must resolve to a signed target profile and exact package
+intents. This prevents a live image from appearing complete while the target
+kernel is missing its Wi-Fi, audio, graphics, storage, Bluetooth, input, or
+firmware support.
+
 Each plan binds:
 
 - the selected profile ID and SHA-256;

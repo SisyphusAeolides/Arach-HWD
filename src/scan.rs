@@ -26,6 +26,16 @@ pub fn scan_inventory(sysfs_root: &Path) -> io::Result<Inventory> {
     })
 }
 
+/// Return the physical bus devices that must have a target profile before an
+/// Arach installation can proceed.  Linux class entries are observations of
+/// their parent device (for example `class:net:wlan0`); requiring a second
+/// profile for every child would both duplicate packages and make coverage
+/// depend on the live kernel's class layout.  Bus identities remain the
+/// stable package boundary and include PCI, USB, I²C, and ACPI functions.
+pub fn target_profile_required(device: &HardwareDevice) -> bool {
+    device.bus != Bus::Sysfs && !device_capabilities(device).is_empty()
+}
+
 pub fn scan_system(sysfs_root: &Path) -> SystemFacts {
     let dmi = sysfs_root.join("class/dmi/id");
     SystemFacts {
@@ -48,6 +58,8 @@ fn scan_pci(root: &Path, output: &mut Vec<HardwareDevice>) -> io::Result<()> {
         let Some(product) = read_hex(path.join("device")) else {
             continue;
         };
+        let mut properties = BTreeMap::new();
+        record_network_children(&path, &mut properties);
         output.push(HardwareDevice {
             key: format!("pci:{id}"),
             bus: Bus::Pci,
@@ -61,7 +73,7 @@ fn scan_pci(root: &Path, output: &mut Vec<HardwareDevice>) -> io::Result<()> {
             class: read_hex(path.join("class")),
             revision: read_hex(path.join("revision")),
             driver: driver_name(&path),
-            properties: BTreeMap::new(),
+            properties,
         });
     }
     Ok(())
@@ -88,6 +100,7 @@ fn scan_usb(root: &Path, output: &mut Vec<HardwareDevice>) -> io::Result<()> {
         };
         let mut properties = BTreeMap::new();
         insert_nonempty(&mut properties, "serial", read_trimmed(path.join("serial")));
+        record_network_children(&path, &mut properties);
         output.push(HardwareDevice {
             key: format!("usb:{id}"),
             bus: Bus::Usb,
@@ -299,6 +312,39 @@ fn is_wireless_name(id: &str, name: &str, target: &Path) -> bool {
         || target.join("wireless").exists()
 }
 
+/// A large class of Wi-Fi controllers deliberately reports a vendor-specific
+/// USB class (0x00) and PCI modalias strings do not contain the word "wifi".
+/// The network child is therefore part of the identity evidence.  Preserve
+/// the interface names in the inventory so a signed hardware profile can
+/// distinguish a wireless function without guessing a package from `wlan0`.
+fn record_network_children(path: &Path, properties: &mut BTreeMap<String, String>) {
+    let mut interfaces = Vec::new();
+    let mut wireless = false;
+    for child in entries(path.join("net")).unwrap_or_default() {
+        let Some(name) = file_name(&child) else {
+            continue;
+        };
+        if name.is_empty() {
+            continue;
+        }
+        let child_text = format!("{} {}", name, child.display()).to_ascii_lowercase();
+        wireless |= child.join("wireless").exists()
+            || child.join("device/wireless").exists()
+            || child_text.contains("wireless")
+            || name.starts_with("wl")
+            || name.starts_with("ww");
+        interfaces.push(name);
+    }
+    interfaces.sort();
+    interfaces.dedup();
+    if !interfaces.is_empty() {
+        properties.insert("net_interfaces".into(), interfaces.join(","));
+    }
+    if wireless {
+        properties.insert("wireless".into(), "1".into());
+    }
+}
+
 fn class_driver_name(path: &Path, target: &Path) -> Option<String> {
     let mut candidates = vec![
         path.join("driver"),
@@ -413,6 +459,22 @@ fn is_virtual_network(name: &str, key: &str) -> bool {
 
 fn device_capabilities(device: &HardwareDevice) -> BTreeSet<HardwareCapability> {
     let mut result = BTreeSet::new();
+    let network_child = device
+        .properties
+        .get("net_interfaces")
+        .is_some_and(|value| !value.is_empty());
+    let wireless = device
+        .properties
+        .get("wireless")
+        .is_some_and(|value| value == "1")
+        || device
+            .properties
+            .get("net_interfaces")
+            .is_some_and(|value| {
+                value
+                    .split(',')
+                    .any(|name| name.starts_with("wl") || name.starts_with("ww"))
+            });
     if let Some(class) = device.properties.get("sysfs_class") {
         match class.as_str() {
             "net" => {
@@ -510,6 +572,15 @@ fn device_capabilities(device: &HardwareDevice) -> BTreeSet<HardwareCapability> 
             }
         }
         Bus::Sysfs => {}
+    }
+    // USB Wi-Fi adapters often have bDeviceClass=0 and PCI devices can expose
+    // a network function through a child interface without a useful modalias.
+    // The child relationship is stronger evidence than a guessed package name.
+    if network_child {
+        result.insert(HardwareCapability::Network);
+    }
+    if wireless {
+        result.insert(HardwareCapability::Wireless);
     }
     if device.properties.contains_key("firmware") {
         result.insert(HardwareCapability::Firmware);
@@ -677,5 +748,79 @@ mod tests {
                 )
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn network_children_reveal_vendor_class_wifi() {
+        let root = scratch();
+        let pci = root.join("bus/pci/devices/0000:00:14.3");
+        let usb = root.join("bus/usb/devices/1-2");
+        fs::create_dir_all(pci.join("net/wlp0s0/wireless")).unwrap();
+        fs::create_dir_all(usb.join("net/wlan0")).unwrap();
+        fs::write(pci.join("vendor"), "8086\n").unwrap();
+        fs::write(pci.join("device"), "51f0\n").unwrap();
+        fs::write(pci.join("class"), "020000\n").unwrap();
+        fs::write(usb.join("idVendor"), "0bda\n").unwrap();
+        fs::write(usb.join("idProduct"), "c820\n").unwrap();
+        // Vendor-specific USB devices are common for Wi-Fi adapters.
+        fs::write(usb.join("bDeviceClass"), "00\n").unwrap();
+
+        let inventory = scan_inventory(&root).unwrap();
+        let wireless = inventory
+            .capabilities
+            .iter()
+            .find(|requirement| requirement.capability == HardwareCapability::Wireless)
+            .unwrap();
+        assert_eq!(wireless.device_keys, vec!["pci:0000:00:14.3", "usb:1-2"]);
+        assert_eq!(
+            wireless.unbound_device_keys,
+            vec!["pci:0000:00:14.3", "usb:1-2"]
+        );
+        let network = inventory
+            .capabilities
+            .iter()
+            .find(|requirement| requirement.capability == HardwareCapability::Network)
+            .unwrap();
+        assert!(network.device_keys.contains(&"usb:1-2".into()));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn target_profile_boundary_ignores_derived_class_nodes() {
+        let bus_device = HardwareDevice {
+            key: "pci:0000:00:14.3".into(),
+            bus: Bus::Pci,
+            sysfs_path: PathBuf::from("bus/pci/devices/0000:00:14.3"),
+            name: String::new(),
+            modalias: "pci:v00008086d00002723".into(),
+            vendor: Some(0x8086),
+            product: Some(0x2723),
+            subsystem_vendor: None,
+            subsystem_product: None,
+            class: Some(0x020000),
+            revision: None,
+            driver: Some("iwlwifi".into()),
+            properties: BTreeMap::new(),
+        };
+        let class_device = HardwareDevice {
+            key: "class:net:wlp0s0".into(),
+            bus: Bus::Sysfs,
+            sysfs_path: PathBuf::from("class/net/wlp0s0"),
+            name: "wlp0s0".into(),
+            modalias: "pci:v00008086d00002723".into(),
+            vendor: Some(0x8086),
+            product: Some(0x2723),
+            subsystem_vendor: None,
+            subsystem_product: None,
+            class: Some(0x020000),
+            revision: None,
+            driver: Some("iwlwifi".into()),
+            properties: BTreeMap::from([
+                ("sysfs_class".into(), "net".into()),
+                ("wireless".into(), "1".into()),
+            ]),
+        };
+        assert!(target_profile_required(&bus_device));
+        assert!(!target_profile_required(&class_device));
     }
 }
