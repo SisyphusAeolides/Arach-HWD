@@ -57,11 +57,12 @@ The current command surface is deliberately read-only:
 `scan` emits inventory schema 5 and `preflight` emits report schema 6. If the metadata options are omitted, the CLI
 discovers every regular, non-symlink `modules.alias`, `modules.dep`,
 `modules.builtin`, and `modules.firmware`
-table under `/lib/modules`, `/usr/lib/modules`, `/run/arach/target-modules`,
-`/run/arach/target/{lib,usr/lib}/modules`, and staged `/mnt`, `/target`,
-`/sysroot`, and live-medium module roots, including every discovered release
-directory. This deterministic union lets a Calamares medium compare its live
-Linux drivers with target-kernel metadata without depending on boot order. The
+table under `/lib/modules`, `/usr/lib/modules`, Arach target/live-root,
+offline-cache, and kernel-module staging roots, plus staged `/mnt`, `/target`,
+`/sysroot`, `/run/live/medium`, and `/run/archiso/bootmnt` module roots,
+including every discovered release directory. This deterministic union lets a
+Calamares medium compare its live Linux drivers with target-kernel metadata
+without depending on boot order. The
 source-scoped candidate properties preserve which live or target metadata
 release produced each module and firmware candidate, so the two kernel trees
 cannot be silently conflated.
@@ -73,9 +74,10 @@ current binding. The `linux_driver_candidate_sources` and
 `linux_firmware_candidate_sources` properties preserve the exact metadata
 table that produced each candidate, so live and target kernel releases cannot
 be silently conflated. With no explicit `--firmware-root`, the CLI also checks
-`/lib/firmware`, `/usr/lib/firmware`, `/run/arach/target-firmware`, target
-`/run/arach/target/{lib,usr/lib}/firmware`, and staged `/mnt`, `/target`,
-`/sysroot`, and live-medium firmware roots. Exact matches are recorded in
+`/lib/firmware`, `/usr/lib/firmware`, Arach target/live-root and offline-cache
+firmware roots, target `/run/arach/target/{lib,usr/lib}/firmware`, and staged
+`/mnt`, `/target`, `/sysroot`, `/run/live/medium`, and `/run/archiso/bootmnt`
+firmware roots. Exact matches are recorded in
 `linux_firmware_files`; the preflight report carries those exact driver and
 firmware paths for each unresolved device. A missing firmware file remains
 unresolved rather than being treated as available merely because a module

@@ -243,6 +243,15 @@ pub fn default_firmware_roots() -> Vec<PathBuf> {
         "/run/arach/target/lib/firmware",
         "/run/arach/target/usr/lib/firmware",
         "/run/arach/target-firmware",
+        "/run/arach-live/rootfs/lib/firmware",
+        "/run/arach-live/rootfs/usr/lib/firmware",
+        "/run/arach-live/target/lib/firmware",
+        "/run/arach-live/target/usr/lib/firmware",
+        "/run/arach-live/firmware",
+        "/run/arach/firmware",
+        "/var/cache/arach/firmware",
+        "/var/lib/arach/firmware",
+        "/opt/arach/firmware",
         "/mnt/lib/firmware",
         "/mnt/usr/lib/firmware",
         "/target/lib/firmware",
@@ -251,6 +260,8 @@ pub fn default_firmware_roots() -> Vec<PathBuf> {
         "/sysroot/usr/lib/firmware",
         "/run/live/medium/lib/firmware",
         "/run/live/medium/usr/lib/firmware",
+        "/run/archiso/bootmnt/lib/firmware",
+        "/run/archiso/bootmnt/usr/lib/firmware",
     ]
     .into_iter()
     .map(PathBuf::from)
@@ -269,6 +280,16 @@ fn default_modules_files(file: &str) -> Vec<PathBuf> {
         PathBuf::from("/run/arach/target/lib/modules"),
         PathBuf::from("/run/arach/target/usr/lib/modules"),
         PathBuf::from("/run/arach/target-modules"),
+        PathBuf::from("/run/arach-live/rootfs/lib/modules"),
+        PathBuf::from("/run/arach-live/rootfs/usr/lib/modules"),
+        PathBuf::from("/run/arach-live/target/lib/modules"),
+        PathBuf::from("/run/arach-live/target/usr/lib/modules"),
+        PathBuf::from("/run/arach-live/kernel-modules"),
+        PathBuf::from("/run/arach/kernel-modules"),
+        PathBuf::from("/var/cache/arach/modules"),
+        PathBuf::from("/var/lib/arach/modules"),
+        PathBuf::from("/opt/arach/modules"),
+        PathBuf::from("/usr/local/lib/modules"),
         PathBuf::from("/mnt/lib/modules"),
         PathBuf::from("/mnt/usr/lib/modules"),
         PathBuf::from("/target/lib/modules"),
@@ -277,6 +298,8 @@ fn default_modules_files(file: &str) -> Vec<PathBuf> {
         PathBuf::from("/sysroot/usr/lib/modules"),
         PathBuf::from("/run/live/medium/lib/modules"),
         PathBuf::from("/run/live/medium/usr/lib/modules"),
+        PathBuf::from("/run/archiso/bootmnt/lib/modules"),
+        PathBuf::from("/run/archiso/bootmnt/usr/lib/modules"),
     ];
     if let Ok(release) = fs::read_to_string("/proc/sys/kernel/osrelease") {
         let release = release.trim();
