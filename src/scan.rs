@@ -240,9 +240,17 @@ pub fn default_firmware_roots() -> Vec<PathBuf> {
     let roots = [
         "/lib/firmware",
         "/usr/lib/firmware",
+        "/run/arach/target/lib/firmware",
+        "/run/arach/target/usr/lib/firmware",
         "/run/arach/target-firmware",
         "/mnt/lib/firmware",
         "/mnt/usr/lib/firmware",
+        "/target/lib/firmware",
+        "/target/usr/lib/firmware",
+        "/sysroot/lib/firmware",
+        "/sysroot/usr/lib/firmware",
+        "/run/live/medium/lib/firmware",
+        "/run/live/medium/usr/lib/firmware",
     ]
     .into_iter()
     .map(PathBuf::from)
@@ -258,9 +266,17 @@ fn default_modules_files(file: &str) -> Vec<PathBuf> {
     let mut roots = vec![
         PathBuf::from("/lib/modules"),
         PathBuf::from("/usr/lib/modules"),
+        PathBuf::from("/run/arach/target/lib/modules"),
+        PathBuf::from("/run/arach/target/usr/lib/modules"),
         PathBuf::from("/run/arach/target-modules"),
         PathBuf::from("/mnt/lib/modules"),
         PathBuf::from("/mnt/usr/lib/modules"),
+        PathBuf::from("/target/lib/modules"),
+        PathBuf::from("/target/usr/lib/modules"),
+        PathBuf::from("/sysroot/lib/modules"),
+        PathBuf::from("/sysroot/usr/lib/modules"),
+        PathBuf::from("/run/live/medium/lib/modules"),
+        PathBuf::from("/run/live/medium/usr/lib/modules"),
     ];
     if let Ok(release) = fs::read_to_string("/proc/sys/kernel/osrelease") {
         let release = release.trim();

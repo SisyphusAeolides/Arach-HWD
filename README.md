@@ -58,7 +58,8 @@ The current command surface is deliberately read-only:
 discovers every regular, non-symlink `modules.alias`, `modules.dep`,
 `modules.builtin`, and `modules.firmware`
 table under `/lib/modules`, `/usr/lib/modules`, `/run/arach/target-modules`,
-and staged `/mnt` module roots, including the running kernel's release
+`/run/arach/target/{lib,usr/lib}/modules`, and staged `/mnt`, `/target`,
+`/sysroot`, and live-medium module roots, including every discovered release
 directory. This deterministic union lets a Calamares medium compare its live
 Linux drivers with target-kernel metadata without depending on boot order. The
 inventory properties `linux_driver_files`, `linux_driver_dependencies`, and
@@ -66,8 +67,9 @@ inventory properties `linux_driver_files`, `linux_driver_dependencies`, and
 audio, graphics, storage, input, and Bluetooth profiles can be audited against
 exact files and dependencies rather than a class name or the live kernel's
 current binding. With no explicit `--firmware-root`, the CLI also checks
-`/lib/firmware`, `/usr/lib/firmware`, `/run/arach/target-firmware`, and staged
-`/mnt` firmware roots. Exact matches are recorded in
+`/lib/firmware`, `/usr/lib/firmware`, `/run/arach/target-firmware`, target
+`/run/arach/target/{lib,usr/lib}/firmware`, and staged `/mnt`, `/target`,
+`/sysroot`, and live-medium firmware roots. Exact matches are recorded in
 `linux_firmware_files`; the preflight report carries those exact driver and
 firmware paths for each unresolved device. A missing firmware file remains
 unresolved rather than being treated as available merely because a module
