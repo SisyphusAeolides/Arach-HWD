@@ -151,15 +151,37 @@ pub fn load_profiles(
     directory: &Path,
     keyring: &Keyring,
 ) -> Result<Vec<VerifiedProfile>, SignatureError> {
-    let mut paths = fs::read_dir(directory)
-        .map_err(|error| SignatureError::Io(error.to_string()))?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.extension()
-                .is_some_and(|extension| extension == "toml")
-        })
-        .collect::<Vec<_>>();
+    fn collect(directory: &Path, paths: &mut Vec<PathBuf>) -> Result<(), SignatureError> {
+        let mut entries = fs::read_dir(directory)
+            .map_err(|error| SignatureError::Io(error.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| SignatureError::Io(error.to_string()))?;
+        entries.sort_by_key(|entry| entry.path());
+        for entry in entries {
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path)
+                .map_err(|error| SignatureError::Io(error.to_string()))?;
+            if metadata.file_type().is_symlink() {
+                return Err(SignatureError::InvalidProfile(format!(
+                    "symlink in profile catalog: {}",
+                    path.display()
+                )));
+            }
+            if metadata.is_dir() {
+                collect(&path, paths)?;
+            } else if metadata.is_file()
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension == "toml")
+            {
+                paths.push(path);
+            }
+        }
+        Ok(())
+    }
+
+    let mut paths = Vec::new();
+    collect(directory, &mut paths)?;
     paths.sort();
     let mut profiles = Vec::new();
     let mut profile_ids = BTreeSet::new();
@@ -377,6 +399,39 @@ quarantine_seconds = 900
         assert_eq!(
             load_profiles(&directory, &keyring),
             Err(SignatureError::DuplicateProfile("same-device".into()))
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn nested_profile_tree_is_loaded_in_path_order() {
+        let signing = SigningKey::from_bytes(&[11_u8; 32]);
+        let (_, keyring) = keyring(&signing, false);
+        let directory = std::env::temp_dir().join(format!(
+            "arach-hwd-nested-signature-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(directory.join("wireless")).unwrap();
+        fs::create_dir_all(directory.join("audio")).unwrap();
+        for (relative, id) in [
+            ("wireless/iwlwifi.toml", "iwlwifi"),
+            ("audio/hda.toml", "hda"),
+        ] {
+            let (profile, signature) = signed_profile(&signing, id);
+            let path = directory.join(relative);
+            fs::write(&path, profile).unwrap();
+            fs::write(signature_path(&path), signature).unwrap();
+        }
+
+        let loaded = load_profiles(&directory, &keyring).unwrap();
+        assert_eq!(
+            loaded
+                .iter()
+                .map(|profile| profile.profile().profile.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["hda", "iwlwifi"]
         );
         fs::remove_dir_all(directory).unwrap();
     }
