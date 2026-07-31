@@ -10,10 +10,13 @@ the exact bus/modalias identity Corinth needs to find a signed driver or
 firmware artifact. It never invents a package name from a class: unresolved
 hardware is emitted as a deterministic lookup query and is a hard preflight
 failure unless the caller explicitly asks for an inventory-only report.
-When regular Linux `modules.alias`, `modules.dep`, `modules.builtin`, and
-`modules.firmware` tables are available, the scanner records sorted matching
-driver candidates, exact module payload paths, built-in status, and firmware
-requirements for each modalias. It also resolves those firmware names against
+When regular Linux `modules.alias`, `modules.dep`, `modules.builtin`,
+`modules.firmware`, and `modules.builtin.modinfo` tables are available, the
+scanner records sorted matching driver candidates, exact module payload paths,
+built-in status, and firmware requirements for each modalias. The modinfo
+table closes the built-in-driver gap: Linux emits firmware requirements for
+compiled-in modules there as NUL-separated records rather than in
+`modules.firmware`. It also resolves those firmware names against
 the live and staged target firmware roots and records every exact path found,
 including common compressed forms. Multiple metadata tables and firmware roots
 may be supplied (for example, the live kernel and the target Arach kernel), so
@@ -48,9 +51,10 @@ prebuilt driver and firmware payloads. Corinth verifies that index against the
 same scoped keyring before installation; when a signed intent is not published
 there, Corinth may use its pinned Arach-Packages recipe and still requires the
 same metadata, artifact, and source-lock digests. The catalog lock also hashes
-the complete four-file Linux metadata snapshot under
-`driver-sources/` (`modules.alias`, `modules.dep`, `modules.builtin`, and
-`modules.firmware`). Calamares passes those exact files to HWD before it falls
+the complete five-file Linux metadata snapshot under
+`driver-sources/` (`modules.alias`, `modules.dep`, `modules.builtin`,
+`modules.firmware`, and `modules.builtin.modinfo`). Calamares passes those
+exact files to HWD before it falls
 back to live, staged-target, or offline module roots. This means Wi-Fi, sound,
 GPU, storage, input, Bluetooth, and firmware lookup starts from a reproducible
 target-aware evidence set instead of whichever module table happened to be
@@ -70,7 +74,7 @@ The current command surface is deliberately read-only:
 
 `scan` emits inventory schema 5 and `preflight` emits report schema 6. If the metadata options are omitted, the CLI
 discovers every regular, non-symlink `modules.alias`, `modules.dep`,
-`modules.builtin`, and `modules.firmware`
+`modules.builtin`, `modules.firmware`, and `modules.builtin.modinfo`
 table under `/lib/modules`, `/usr/lib/modules`, Arach target/live-root,
 offline-cache, and kernel-module staging roots, plus staged `/mnt`, `/target`,
 `/sysroot`, `/run/live/medium`, and `/run/archiso/bootmnt` module roots,
@@ -123,8 +127,9 @@ is printed for inspection. The plan output is the boundary for Corinth's
 durable transaction service.
 
 Every inventory and preflight report also contains `driver_sources`. It lists
-the hashed `modules.alias`, `modules.dep`, `modules.builtin`, and
-`modules.firmware` files that were consulted, including the kernel release
+the hashed `modules.alias`, `modules.dep`, `modules.builtin`,
+`modules.firmware`, and `modules.builtin.modinfo` files that were consulted,
+including the kernel release
 scope for every conventional `/.../modules/<release>/modules.*` table, plus
 the firmware discovery roots,
 and the immutable authorities used for the next lookup. The Arach-HWD and

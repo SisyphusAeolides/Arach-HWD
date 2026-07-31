@@ -241,7 +241,17 @@ pub fn default_modules_aliases() -> Vec<PathBuf> {
 /// image.  Firmware names are advisory evidence; signed Arach profiles still
 /// authorize the actual transaction.
 pub fn default_modules_firmware_files() -> Vec<PathBuf> {
-    default_modules_files("modules.firmware")
+    // `modules.firmware` is the depmod table used by most distributions.
+    // Built-in drivers do not appear there, however; their firmware strings
+    // are emitted as NUL-separated `module.firmware=name` records in
+    // `modules.builtin.modinfo`.  Treat both as one deterministic firmware
+    // evidence set so a built-in Wi-Fi, audio, GPU, or USB controller is not
+    // invisible merely because it has no loadable .ko payload.
+    let mut paths = default_modules_files("modules.firmware");
+    paths.extend(default_modules_files("modules.builtin.modinfo"));
+    paths.sort();
+    paths.dedup();
+    paths
 }
 
 /// Locate every module-to-payload dependency table available to the live
@@ -1388,6 +1398,46 @@ fn parse_modules_alias(text: &str) -> Vec<LinuxAlias> {
 
 fn parse_modules_firmware(text: &str) -> Vec<ModuleFirmware> {
     let mut records = Vec::new();
+    // `modules.builtin.modinfo` is NUL-separated and uses the modinfo key
+    // form `module.firmware=name`.  Keep this parser deliberately narrow:
+    // only firmware records become candidates, and invalid paths are
+    // discarded by the same validation used for textual modules.firmware.
+    if text.as_bytes().contains(&0) {
+        for record in text.split('\0') {
+            let Some((key, firmware_text)) = record.split_once('=') else {
+                continue;
+            };
+            let Some(module) = key.strip_suffix(".firmware") else {
+                continue;
+            };
+            let module = canonical_module_name(module);
+            if module.is_empty() {
+                continue;
+            }
+            let firmware = firmware_text
+                .split(|character: char| character.is_ascii_whitespace() || character == ',')
+                .filter(|name| valid_firmware_candidate(name))
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>();
+            if firmware.is_empty() {
+                continue;
+            }
+            if let Some(existing) = records
+                .iter_mut()
+                .find(|record: &&mut ModuleFirmware| record.module == module)
+            {
+                existing.firmware.extend(firmware);
+                existing.firmware.sort();
+                existing.firmware.dedup();
+            } else {
+                records.push(ModuleFirmware {
+                    module,
+                    firmware,
+                    sources: Vec::new(),
+                });
+            }
+        }
+    }
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -2407,6 +2457,58 @@ mod tests {
                 root.join("target-firmware").display(),
                 root.join("live-firmware").display(),
             ))
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn builtin_modinfo_firmware_records_are_resolved() {
+        let root = scratch();
+        let pci = root.join("bus/pci/devices/0000:00:14.3");
+        let firmware_root = root.join("firmware");
+        fs::create_dir_all(&pci).unwrap();
+        fs::create_dir_all(&firmware_root).unwrap();
+        fs::write(pci.join("vendor"), "8086\n").unwrap();
+        fs::write(pci.join("device"), "2723\n").unwrap();
+        fs::write(
+            pci.join("modalias"),
+            "pci:v00008086d00002723sv00001028sd00000001bc02sc80i00\n",
+        )
+        .unwrap();
+        let aliases = root.join("modules.alias");
+        fs::write(&aliases, "alias pci:v00008086d00002723* builtin_wifi\n").unwrap();
+        let modinfo = root.join("modules.builtin.modinfo");
+        fs::write(
+            &modinfo,
+            b"builtin_wifi.file=drivers/net/builtin_wifi\0builtin_wifi.firmware=wifi/builtin.bin\0",
+        )
+        .unwrap();
+        fs::create_dir_all(firmware_root.join("wifi")).unwrap();
+        fs::write(firmware_root.join("wifi/builtin.bin"), b"builtin").unwrap();
+
+        let inventory = scan_inventory_with_driver_sources(
+            &root,
+            std::slice::from_ref(&aliases),
+            std::slice::from_ref(&modinfo),
+            &[],
+            &[],
+            std::slice::from_ref(&firmware_root),
+        )
+        .unwrap();
+        let device = inventory
+            .devices
+            .iter()
+            .find(|device| device.key == "pci:0000:00:14.3")
+            .unwrap();
+        assert_eq!(
+            device.properties.get("linux_firmware_candidates"),
+            Some(&String::from("wifi/builtin.bin"))
+        );
+        assert!(
+            device
+                .properties
+                .get("linux_firmware_files")
+                .is_some_and(|value| value.contains("wifi/builtin.bin="))
         );
         fs::remove_dir_all(root).unwrap();
     }

@@ -17,11 +17,12 @@ const MAX_CATALOG_FILE_BYTES: u64 = 4 * 1024 * 1024;
 /// snapshot.  These files are discovery evidence (the signed profiles and
 /// package index remain the installation authority), but pinning their bytes
 /// prevents Calamares from silently using whichever kernel happened to boot.
-pub const REQUIRED_DRIVER_SOURCES: [&str; 4] = [
+pub const REQUIRED_DRIVER_SOURCES: [&str; 5] = [
     "driver-sources/modules.alias",
     "driver-sources/modules.dep",
     "driver-sources/modules.builtin",
     "driver-sources/modules.firmware",
+    "driver-sources/modules.builtin.modinfo",
 ];
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]

@@ -12,9 +12,10 @@ for an exact binary install, or build the matching pinned recipe when a binary
 record is unavailable. Both paths must match every plan digest and produce
 owned-file receipts before the target is changed.
 
-The catalog lock also contains four `driver_source` records rooted at
-`driver-sources/`: `modules.alias`, `modules.dep`, `modules.builtin`, and
-`modules.firmware`. Their bytes are hashed in the lock and are mandatory live
+The catalog lock also contains five `driver_source` records rooted at
+`driver-sources/`: `modules.alias`, `modules.dep`, `modules.builtin`,
+`modules.firmware`, and `modules.builtin.modinfo`. Their bytes are hashed in
+the lock and are mandatory live
 installer inputs. They are discovery evidence, not installation authority;
 the signed profile and package index still authorize a transaction. The
 installer may add exact target/live metadata tables and firmware roots, but it
@@ -32,8 +33,9 @@ The preflight report contains fixed capability groups for network, wireless,
 audio, graphics, storage, input, Bluetooth, and firmware. Each unresolved
 physical device carries its stable key, bus, vendor/product/class identity,
 and kernel modalias. It may also include deterministic `modules.alias` driver
-matches and `modules.firmware` firmware names from one or more live/target
-kernel metadata sets, the exact metadata table that produced each candidate,
+matches and `modules.firmware`/`modules.builtin.modinfo` firmware names from
+one or more live/target kernel metadata sets, the exact metadata table that
+produced each candidate,
 plus exact module payload/dependency/builtin paths and firmware files found
 under the supplied live/target roots. Firmware aliases are followed only when
 they resolve to a regular file inside the selected root; the canonical payload
@@ -55,7 +57,9 @@ is also a profile boundary when its capability is not yet classified if it is
 unbound or target metadata supplies driver evidence. This
 prevents a live image from appearing complete while the target
 kernel is missing its Wi-Fi, audio, graphics, storage, Bluetooth, input, or
-firmware support.
+firmware support. The `modules.builtin.modinfo` input is NUL-separated Linux
+modinfo data; HWD consumes only `module.firmware` records, so unrelated modinfo
+fields never become package authority.
 
 Each plan binds:
 
