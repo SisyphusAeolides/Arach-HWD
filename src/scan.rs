@@ -1,10 +1,12 @@
-use crate::facts::{Bus, HardwareDevice, Inventory, SystemFacts};
-use std::collections::BTreeMap;
+use crate::facts::{
+    Bus, CapabilityRequirement, HardwareCapability, HardwareDevice, Inventory, SystemFacts,
+};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-pub const INVENTORY_SCHEMA: u32 = 1;
+pub const INVENTORY_SCHEMA: u32 = 2;
 
 pub fn scan_inventory(sysfs_root: &Path) -> io::Result<Inventory> {
     let mut devices = Vec::new();
@@ -12,12 +14,15 @@ pub fn scan_inventory(sysfs_root: &Path) -> io::Result<Inventory> {
     scan_usb(sysfs_root, &mut devices)?;
     scan_i2c(sysfs_root, &mut devices)?;
     scan_acpi(sysfs_root, &mut devices)?;
+    scan_class_devices(sysfs_root, &mut devices)?;
     devices.sort_by(|left, right| left.key.cmp(&right.key));
     devices.dedup_by(|left, right| left.key == right.key);
+    let capabilities = capability_requirements(&devices);
     Ok(Inventory {
         schema: INVENTORY_SCHEMA,
         system: scan_system(sysfs_root),
         devices,
+        capabilities,
     })
 }
 
@@ -170,6 +175,348 @@ fn scan_acpi(root: &Path, output: &mut Vec<HardwareDevice>) -> io::Result<()> {
     Ok(())
 }
 
+/// Scan Linux class devices in addition to their PCI/USB parents.  Class
+/// entries are what make the contract useful to an installer: a wireless
+/// interface, ALSA card, DRM connector, block device, input node, or
+/// bluetooth controller can be observed even when the parent bus does not
+/// expose a sufficiently specific class code.
+fn scan_class_devices(root: &Path, output: &mut Vec<HardwareDevice>) -> io::Result<()> {
+    for class in [
+        "net",
+        "sound",
+        "drm",
+        "block",
+        "input",
+        "bluetooth",
+        "firmware",
+    ] {
+        for path in entries(root.join("class").join(class))? {
+            let Some(id) = file_name(&path) else {
+                continue;
+            };
+            let target = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+            let name = class_device_name(&path, &id);
+            let mut properties = BTreeMap::new();
+            properties.insert("sysfs_class".into(), class.into());
+            insert_nonempty(
+                &mut properties,
+                "interface",
+                read_first(&[
+                    path.join("interface"),
+                    path.join("device/interface"),
+                    target.join("interface"),
+                ]),
+            );
+            insert_nonempty(
+                &mut properties,
+                "firmware",
+                read_first(&[
+                    path.join("firmware"),
+                    path.join("device/firmware"),
+                    target.join("firmware"),
+                ]),
+            );
+            if class == "net" && is_wireless_name(&id, &name, &target) {
+                properties.insert("wireless".into(), "1".into());
+            }
+            if class == "block" {
+                insert_nonempty(
+                    &mut properties,
+                    "partition",
+                    read_first(&[path.join("partition"), target.join("partition")]),
+                );
+                if is_virtual_block(&id, &target) {
+                    properties.insert("virtual".into(), "1".into());
+                }
+            }
+            output.push(HardwareDevice {
+                key: format!("class:{class}:{id}"),
+                bus: Bus::Sysfs,
+                sysfs_path: relative(root, &path),
+                name,
+                modalias: read_first(&[
+                    path.join("modalias"),
+                    path.join("device/modalias"),
+                    target.join("modalias"),
+                    target.join("device/modalias"),
+                ]),
+                vendor: read_first_hex(&[
+                    path.join("vendor"),
+                    path.join("device/vendor"),
+                    target.join("vendor"),
+                    target.join("device/vendor"),
+                ]),
+                product: read_first_hex(&[
+                    path.join("device"),
+                    path.join("device/device"),
+                    target.join("device"),
+                    target.join("device/device"),
+                ]),
+                subsystem_vendor: read_first_hex(&[
+                    path.join("device/subsystem_vendor"),
+                    target.join("device/subsystem_vendor"),
+                ]),
+                subsystem_product: read_first_hex(&[
+                    path.join("device/subsystem_device"),
+                    target.join("device/subsystem_device"),
+                ]),
+                class: read_first_hex(&[
+                    path.join("class"),
+                    path.join("device/class"),
+                    target.join("class"),
+                    target.join("device/class"),
+                ]),
+                revision: read_first_hex(&[
+                    path.join("device/revision"),
+                    target.join("revision"),
+                    target.join("device/revision"),
+                ]),
+                driver: class_driver_name(&path, &target),
+                properties,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn class_device_name(path: &Path, id: &str) -> String {
+    let name = read_first(&[
+        path.join("name"),
+        path.join("device/name"),
+        path.join("id"),
+        path.join("device/id"),
+    ]);
+    if name.is_empty() { id.to_owned() } else { name }
+}
+
+fn is_wireless_name(id: &str, name: &str, target: &Path) -> bool {
+    let text = format!("{} {} {}", id, name, target.display()).to_ascii_lowercase();
+    text.contains("wlan")
+        || text.contains("wifi")
+        || text.contains("wireless")
+        || text.contains("wlp")
+        || text.contains("wwan")
+        || target.join("wireless").exists()
+}
+
+fn class_driver_name(path: &Path, target: &Path) -> Option<String> {
+    let mut candidates = vec![
+        path.join("driver"),
+        path.join("device/driver"),
+        path.join("device/device/driver"),
+        target.join("driver"),
+        target.join("device/driver"),
+        target.join("device/device/driver"),
+    ];
+    if let Some(parent) = target.parent() {
+        candidates.push(parent.join("driver"));
+    }
+    candidates
+        .into_iter()
+        .find_map(|candidate| driver_name_from_link(&candidate))
+}
+
+fn is_virtual_block(id: &str, target: &Path) -> bool {
+    id.starts_with("dm-")
+        || id.starts_with("loop")
+        || id.starts_with("ram")
+        || id.starts_with("zram")
+        || target.to_string_lossy().contains("virtual")
+}
+
+fn driver_name_from_link(path: &Path) -> Option<String> {
+    fs::canonicalize(path)
+        .ok()?
+        .file_name()?
+        .to_str()
+        .map(ToOwned::to_owned)
+}
+
+fn read_first(paths: &[PathBuf]) -> String {
+    paths
+        .iter()
+        .map(|path| read_trimmed(path.clone()))
+        .find(|value| !value.is_empty())
+        .unwrap_or_default()
+}
+
+fn read_first_hex(paths: &[PathBuf]) -> Option<u32> {
+    paths.iter().find_map(|path| read_hex(path.clone()))
+}
+
+fn capability_requirements(devices: &[HardwareDevice]) -> Vec<CapabilityRequirement> {
+    HardwareCapability::ALL
+        .into_iter()
+        .map(|capability| {
+            let mut device_keys = BTreeSet::new();
+            let mut modaliases = BTreeSet::new();
+            let mut bound_drivers = BTreeSet::new();
+            let mut unbound_device_keys = BTreeSet::new();
+            for device in devices {
+                if device_capabilities(device).contains(&capability)
+                    && is_requirement_candidate(device, capability)
+                {
+                    device_keys.insert(device.key.clone());
+                    if !device.modalias.is_empty() {
+                        modaliases.insert(device.modalias.clone());
+                    }
+                    if let Some(driver) = &device.driver {
+                        bound_drivers.insert(driver.clone());
+                    } else {
+                        unbound_device_keys.insert(device.key.clone());
+                    }
+                }
+            }
+            CapabilityRequirement {
+                capability,
+                device_keys: device_keys.into_iter().collect(),
+                modaliases: modaliases.into_iter().collect(),
+                bound_drivers: bound_drivers.into_iter().collect(),
+                unbound_device_keys: unbound_device_keys.into_iter().collect(),
+            }
+        })
+        .collect()
+}
+
+fn is_requirement_candidate(device: &HardwareDevice, capability: HardwareCapability) -> bool {
+    let Some(class) = device.properties.get("sysfs_class") else {
+        return true;
+    };
+    match (class.as_str(), capability) {
+        ("net", HardwareCapability::Network | HardwareCapability::Wireless) => {
+            !is_virtual_network(&device.name, &device.key)
+        }
+        ("sound", HardwareCapability::Audio) => device.name.starts_with("card"),
+        ("drm", HardwareCapability::Graphics) => {
+            device.name.starts_with("card") && !device.name.contains('-')
+        }
+        ("block", HardwareCapability::Storage) => {
+            !device.properties.contains_key("partition")
+                && !device.properties.contains_key("virtual")
+        }
+        ("input", HardwareCapability::Input) => device.name.starts_with("event"),
+        _ => true,
+    }
+}
+
+fn is_virtual_network(name: &str, key: &str) -> bool {
+    if name == "lo" {
+        return true;
+    }
+    let text = format!("{name} {key}").to_ascii_lowercase();
+    [
+        " lo", "lo:", ":lo", "docker", "veth", "virbr", "br-", "dummy", "tun", "tap",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
+}
+
+fn device_capabilities(device: &HardwareDevice) -> BTreeSet<HardwareCapability> {
+    let mut result = BTreeSet::new();
+    if let Some(class) = device.properties.get("sysfs_class") {
+        match class.as_str() {
+            "net" => {
+                result.insert(HardwareCapability::Network);
+                if device
+                    .properties
+                    .get("wireless")
+                    .is_some_and(|value| value == "1")
+                {
+                    result.insert(HardwareCapability::Wireless);
+                }
+            }
+            "sound" => {
+                result.insert(HardwareCapability::Audio);
+            }
+            "drm" => {
+                result.insert(HardwareCapability::Graphics);
+            }
+            "block" => {
+                result.insert(HardwareCapability::Storage);
+            }
+            "input" => {
+                result.insert(HardwareCapability::Input);
+            }
+            "bluetooth" => {
+                result.insert(HardwareCapability::Bluetooth);
+            }
+            "firmware" => {
+                result.insert(HardwareCapability::Firmware);
+            }
+            _ => {}
+        }
+    }
+    match device.bus {
+        Bus::Pci => match device.class.map(|class| (class >> 16) & 0xff) {
+            Some(0x01) => {
+                result.insert(HardwareCapability::Storage);
+            }
+            Some(0x02) => {
+                result.insert(HardwareCapability::Network);
+                if device.name.to_ascii_lowercase().contains("wireless")
+                    || device.modalias.to_ascii_lowercase().contains("wifi")
+                {
+                    result.insert(HardwareCapability::Wireless);
+                }
+            }
+            Some(0x03) => {
+                result.insert(HardwareCapability::Graphics);
+            }
+            Some(0x04) => {
+                result.insert(HardwareCapability::Audio);
+            }
+            Some(0x09) => {
+                result.insert(HardwareCapability::Input);
+            }
+            _ => {}
+        },
+        Bus::Usb => match device.class.map(|class| class & 0xff) {
+            Some(0x01) => {
+                result.insert(HardwareCapability::Audio);
+            }
+            Some(0x02) => {
+                result.insert(HardwareCapability::Network);
+            }
+            Some(0x03) => {
+                result.insert(HardwareCapability::Input);
+            }
+            Some(0x08) => {
+                result.insert(HardwareCapability::Storage);
+            }
+            Some(0x0e) => {
+                result.insert(HardwareCapability::Graphics);
+            }
+            Some(0xe0) => {
+                result.insert(HardwareCapability::Bluetooth);
+                result.insert(HardwareCapability::Wireless);
+            }
+            _ => {}
+        },
+        Bus::I2c | Bus::Acpi => {
+            let text = format!("{} {}", device.name, device.modalias).to_ascii_lowercase();
+            if [
+                "elan",
+                "synaptics",
+                "touchpad",
+                "wacom",
+                "atml",
+                "pnp0c50",
+                "msft0001",
+            ]
+            .iter()
+            .any(|needle| text.contains(needle))
+            {
+                result.insert(HardwareCapability::Input);
+            }
+        }
+        Bus::Sysfs => {}
+    }
+    if device.properties.contains_key("firmware") {
+        result.insert(HardwareCapability::Firmware);
+    }
+    result
+}
+
 fn entries(directory: PathBuf) -> io::Result<Vec<PathBuf>> {
     let entries = match fs::read_dir(directory) {
         Ok(entries) => entries,
@@ -281,6 +628,53 @@ mod tests {
         assert_eq!(
             elan.properties.get("runtime_watchdog").map(String::as_str),
             Some("enabled=1 recoveries=2")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn class_devices_become_capability_queries() {
+        let root = scratch();
+        let net = root.join("class/net/wlan0");
+        let sound = root.join("class/sound/card0");
+        let input = root.join("class/input/event0");
+        let net_driver = root.join("bus/pci/drivers/iwlwifi");
+        fs::create_dir_all(&net).unwrap();
+        fs::create_dir_all(&sound).unwrap();
+        fs::create_dir_all(&input).unwrap();
+        fs::create_dir_all(&net_driver).unwrap();
+        fs::write(net.join("device"), "not-a-symlink").unwrap();
+        fs::write(net.join("modalias"), "pci:v00008086d00001234").unwrap();
+        fs::write(sound.join("modalias"), "pci:v00008086d00005678").unwrap();
+        fs::write(input.join("modalias"), "input:b0003v0001").unwrap();
+        symlink(&net_driver, net.join("driver")).unwrap();
+
+        let inventory = scan_inventory(&root).unwrap();
+        let network = inventory
+            .capabilities
+            .iter()
+            .find(|requirement| requirement.capability == HardwareCapability::Network)
+            .unwrap();
+        assert_eq!(network.device_keys, vec!["class:net:wlan0"]);
+        assert_eq!(network.bound_drivers, vec!["iwlwifi"]);
+        assert!(network.unbound_device_keys.is_empty());
+        assert!(
+            inventory
+                .capabilities
+                .iter()
+                .any(
+                    |requirement| requirement.capability == HardwareCapability::Audio
+                        && requirement.device_keys == vec!["class:sound:card0"]
+                )
+        );
+        assert!(
+            inventory
+                .capabilities
+                .iter()
+                .any(
+                    |requirement| requirement.capability == HardwareCapability::Input
+                        && requirement.unbound_device_keys == vec!["class:input:event0"]
+                )
         );
         fs::remove_dir_all(root).unwrap();
     }

@@ -1,10 +1,13 @@
 # Arach HWD
 
 Arach HWD is the automatic hardware detection and provisioning planner for
-Arach OS. It scans PCI, USB, I2C, ACPI, and DMI facts without modifying the
-machine, admits only Ed25519-verified hardware profiles, resolves one
-non-conflicting profile deterministically, and emits exact package intents for
-Corinth.
+Arach OS. It scans PCI, USB, I2C, ACPI, DMI, and Linux class devices without
+modifying the machine. The inventory groups network, wireless, audio,
+graphics, storage, input, Bluetooth, and firmware capabilities and preserves
+the exact bus/modalias identity Corinth needs to find a signed driver or
+firmware artifact. It never invents a package name from a class: unresolved
+hardware is emitted as a deterministic lookup query and is a hard preflight
+failure unless the caller explicitly asks for an inventory-only report.
 
 Profiles cannot execute shell commands. Driver and firmware intents must use
 the signed Arach hardware repository, include artifact, metadata, and source
@@ -22,11 +25,19 @@ quarantined states instead of resetting the controller forever.
 The current command surface is deliberately read-only:
 
     arach-hwd scan [--sysfs /sys]
+    arach-hwd preflight [--sysfs /sys] [--output FILE]
+    arach-hwd preflight [--sysfs /sys] --allow-unresolved
     arach-hwd plan --profiles DIR --keyring FILE --driver-abi 1.0 [--sysfs /sys]
 
-The plan output is the boundary for Corinth's durable transaction service.
-Direct package installation and driver activation remain incomplete until that
-cross-service protocol is implemented and verified.
+`scan` emits inventory schema 2. `preflight` emits a signed-repository query
+surface for every present capability and returns failure when a physical
+device has no bound driver. `--allow-unresolved` is intended for discovery
+tools and Calamares diagnostics; it does not authorize installation. A signed
+profile and an Arach Hardware repository package intent are still required
+before Corinth may activate a driver or firmware package. `plan` refuses to
+emit a partial package set when an unresolved device has no matching signed
+profile. The plan output is the boundary for Corinth's durable transaction
+service.
 
 ## Validation
 

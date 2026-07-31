@@ -1,7 +1,18 @@
 # Corinth provisioning boundary
 
-Arach HWD emits plan schema 1. A plan is immutable input to Corinth and is not
-itself proof that a package was installed.
+Arach HWD emits inventory schema 2, preflight report schema 1, and plan schema
+1. An inventory or preflight report is discovery evidence only; a plan is
+immutable input to Corinth and is not itself proof that a package was
+installed.
+
+The preflight report contains fixed capability groups for network, wireless,
+audio, graphics, storage, input, Bluetooth, and firmware. Each unresolved
+physical device carries its stable key, bus, vendor/product/class identity,
+and kernel modalias. Corinth uses that tuple to query the signed
+`arach-hardware` index. HWD does not translate `wlan0`, `card0`, or a driver
+name into a package because that would make hardware activation
+non-reproducible. Virtual interfaces and child class nodes are excluded from
+the unresolved set; their parent device is the package boundary.
 
 Each plan binds:
 
