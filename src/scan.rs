@@ -641,13 +641,23 @@ fn annotate_linux_firmware_candidates(
     devices: &mut [HardwareDevice],
     modules_firmware: &[PathBuf],
 ) -> io::Result<()> {
-    let mut records = Vec::new();
+    let mut record_map = BTreeMap::<String, BTreeSet<String>>::new();
     for path in modules_firmware {
         let text = read_modules_metadata(path, MAX_MODULES_FIRMWARE_BYTES, "modules firmware")?;
-        records.extend(parse_modules_firmware(&text));
+        for record in parse_modules_firmware(&text) {
+            record_map
+                .entry(record.module)
+                .or_default()
+                .extend(record.firmware);
+        }
     }
-    records.sort_by(|left, right| left.module.cmp(&right.module));
-    records.dedup_by(|left, right| left.module == right.module);
+    let records = record_map
+        .into_iter()
+        .map(|(module, firmware)| ModuleFirmware {
+            module,
+            firmware: firmware.into_iter().collect(),
+        })
+        .collect::<Vec<_>>();
 
     for device in devices {
         let mut drivers = BTreeSet::new();
@@ -712,13 +722,7 @@ fn parse_modules_alias(text: &str) -> Vec<LinuxAlias> {
         let (Some(pattern), Some(driver)) = (fields.next(), fields.next()) else {
             continue;
         };
-        if fields.next().is_some()
-            || pattern.is_empty()
-            || !valid_driver_candidate(driver)
-            || aliases
-                .iter()
-                .any(|alias: &LinuxAlias| alias.pattern == pattern && alias.driver == driver)
-        {
+        if fields.next().is_some() || pattern.is_empty() || !valid_driver_candidate(driver) {
             continue;
         }
         aliases.push(LinuxAlias {
@@ -754,7 +758,7 @@ fn parse_modules_firmware(text: &str) -> Vec<ModuleFirmware> {
             continue;
         }
         let mut firmware = firmware_text
-            .split_ascii_whitespace()
+            .split(|character: char| character.is_ascii_whitespace() || character == ',')
             .filter(|name| valid_firmware_candidate(name))
             .map(ToOwned::to_owned)
             .collect::<Vec<_>>();
@@ -1447,11 +1451,17 @@ mod tests {
              kernel/drivers/net/wireless/ath12k.ko: ath12k/test.bin ../escape.bin\n",
         )
         .unwrap();
+        let target_firmware = root.join("target.modules.firmware");
+        fs::write(
+            &target_firmware,
+            "kernel/drivers/net/wireless/iwlwifi.ko: iwlwifi-c.bin\n",
+        )
+        .unwrap();
 
         let inventory = scan_inventory_with_modules_metadata(
             &root,
             &[live_aliases, target_aliases],
-            &[firmware],
+            &[firmware, target_firmware],
         )
         .unwrap();
         let device = inventory
@@ -1466,7 +1476,7 @@ mod tests {
         assert_eq!(
             device.properties.get("linux_firmware_candidates"),
             Some(&String::from(
-                "ath12k/test.bin,iwlwifi-a.bin,iwlwifi/iwlwifi-b.bin"
+                "ath12k/test.bin,iwlwifi-a.bin,iwlwifi-c.bin,iwlwifi/iwlwifi-b.bin"
             ))
         );
         fs::remove_dir_all(root).unwrap();
