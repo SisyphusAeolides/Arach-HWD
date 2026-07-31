@@ -24,8 +24,9 @@ missing signed Arach profile or package artifact is installable. Candidates
 help maintainers close catalog gaps and remain advisory evidence until a
 signed profile and package intent authorize a transaction. Physical devices
 with an unfamiliar capability class still carry a modalias or bound-driver
-identity; Calamares therefore requires a signed target profile for them instead
-of silently treating an unclassified camera, modem, sensor, security device, or
+identity; when they are unbound or target metadata supplies driver evidence,
+Calamares therefore requires a signed target profile instead of silently
+treating an unclassified camera, modem, sensor, security device, or
 coprocessor as optional.
 
 Profiles cannot execute shell commands. Driver and firmware intents must use

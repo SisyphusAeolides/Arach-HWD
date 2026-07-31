@@ -378,15 +378,26 @@ fn is_regular_non_symlink(path: &Path) -> bool {
 /// stable package boundary and include PCI, USB, I²C, ACPI, platform, SPI,
 /// serio, and HID functions.
 pub fn target_profile_required(device: &HardwareDevice) -> bool {
+    let target_driver_evidence = [
+        "linux_driver_candidates",
+        "linux_driver_files",
+        "linux_driver_builtins",
+    ]
+    .iter()
+    .any(|key| device.properties.contains_key(*key));
     device.bus != Bus::Sysfs
         && (!device_capabilities(device).is_empty()
             // A physical function with a modalias or a bound driver is still
             // a package boundary even when its class is not in our fixed
             // capability vocabulary.  Requiring a signed profile here keeps
             // camera, modem, sensor, security, and vendor-coprocessor
-            // hardware from being silently omitted by Calamares.
-            || !device.modalias.is_empty()
-            || device.driver.is_some())
+            // hardware from being silently omitted by Calamares.  A live-only
+            // bound driver is not enough on its own: require the extra gate
+            // when the device is unbound or target metadata has produced
+            // candidate evidence.
+            || (!device.modalias.is_empty()
+                && (device.driver.is_none() || target_driver_evidence))
+            || target_driver_evidence)
 }
 
 pub fn scan_system(sysfs_root: &Path) -> SystemFacts {
@@ -2333,6 +2344,14 @@ mod tests {
             properties: BTreeMap::new(),
         };
         assert!(target_profile_required(&device));
+        let mut live_bound = device.clone();
+        live_bound.driver = Some("vendor_camera".into());
+        assert!(!target_profile_required(&live_bound));
+        live_bound.properties.insert(
+            "linux_driver_files".into(),
+            "vendor_camera=drivers/camera.ko".into(),
+        );
+        assert!(target_profile_required(&live_bound));
     }
 
     #[test]
