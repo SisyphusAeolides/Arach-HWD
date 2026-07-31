@@ -17,6 +17,12 @@ profiles but cannot create a hardware match or grant installation authority.
 Equal priority and rank evidence is an explicit ambiguity and produces no
 provisioning plan.
 
+The release catalog is required to contain at least one signed profile and its
+lock must enumerate every profile/signature byte. An empty catalog is rejected
+before Calamares can mutate a target; broad hardware coverage comes from the
+signed Arach Hardware profile/index artifact, not from guessing a package name
+from a device class.
+
 ELAN recovery evidence is treated as health telemetry. A successful
 elan-guardian recovery keeps the device available; repeated recoveries inside
 a signed profile's time window escalate through recovered, degraded, and

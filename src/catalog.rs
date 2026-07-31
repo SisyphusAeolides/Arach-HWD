@@ -115,6 +115,11 @@ fn validate_lock_shape(lock: &CatalogLock) -> Result<(), CatalogError> {
             "unsupported or unnamed catalog snapshot".into(),
         ));
     }
+    if lock.profile.is_empty() {
+        return Err(CatalogError::Invalid(
+            "catalog contains no signed hardware profiles".into(),
+        ));
+    }
     if !valid_digest(&lock.keyring_sha256) {
         return Err(CatalogError::Invalid(
             "catalog keyring digest is not SHA-256".into(),
@@ -241,6 +246,26 @@ mod tests {
         let lock_path = root.join("catalog.lock");
         fs::write(&lock_path, lock).unwrap();
         assert!(verify_catalog(&lock_path, &profiles, &keyring).is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn empty_catalog_is_not_a_valid_installer_input() {
+        let root = scratch();
+        let profiles = root.join("profiles");
+        fs::create_dir_all(&profiles).unwrap();
+        let keyring = root.join("keys.toml");
+        fs::write(&keyring, "[key]\n").unwrap();
+        let lock_path = root.join("catalog.lock");
+        fs::write(
+            &lock_path,
+            format!(
+                "format = 1\nsnapshot = \"empty\"\nkeyring_sha256 = \"{}\"\n",
+                sha256(&fs::read(&keyring).unwrap())
+            ),
+        )
+        .unwrap();
+        assert!(verify_catalog(&lock_path, &profiles, &keyring).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 }

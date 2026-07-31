@@ -8,7 +8,10 @@ Corinth and is not itself proof that a package was installed.
 
 The lock records the catalog snapshot, the keyring digest, and the digest of
 every profile and detached signature. `arach-hwd plan` rejects additions,
-removals, symlinks, or byte changes before it resolves a device.
+removals, symlinks, or byte changes before it resolves a device. A release
+catalog must enumerate at least one signed profile; an empty profile tree is
+not a valid installer input because it cannot provision Wi-Fi, audio, graphics,
+storage, input, Bluetooth, or firmware devices.
 
 The preflight report contains fixed capability groups for network, wireless,
 audio, graphics, storage, input, Bluetooth, and firmware. Each unresolved
