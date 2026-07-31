@@ -8,7 +8,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-pub const INVENTORY_SCHEMA: u32 = 4;
+pub const INVENTORY_SCHEMA: u32 = 5;
 
 pub fn scan_inventory(sysfs_root: &Path) -> io::Result<Inventory> {
     scan_inventory_with_modules_metadata(sysfs_root, &[], &[])
@@ -142,6 +142,7 @@ fn driver_source_manifest(
             evidence.push(DriverSourceEvidence {
                 kind: kind.clone(),
                 path: path.clone(),
+                kernel_release: kernel_release(path),
                 sha256: Some(format!("{:x}", hasher.finalize())),
             });
         }
@@ -160,6 +161,7 @@ fn driver_source_manifest(
         evidence.push(DriverSourceEvidence {
             kind: DriverSourceKind::FirmwareTree,
             path,
+            kernel_release: None,
             sha256: None,
         });
     }
@@ -170,6 +172,19 @@ fn driver_source_manifest(
     });
     evidence.dedup();
     Ok(DriverSourceManifest::new(evidence))
+}
+
+/// Return the release directory for a module metadata table when it follows
+/// the conventional `/.../modules/<release>/modules.*` layout.  Explicit
+/// fixture paths and flattened metadata files intentionally return `None`;
+/// their absolute path is still hashed and retained as evidence.
+fn kernel_release(path: &Path) -> Option<String> {
+    let release_dir = path.parent()?;
+    if release_dir.parent()?.file_name()?.to_str()? != "modules" {
+        return None;
+    }
+    let release = release_dir.file_name()?.to_str()?.trim();
+    (!release.is_empty()).then(|| release.to_owned())
 }
 
 /// Locate the alias table belonging to the running Linux kernel.  This is
@@ -2055,12 +2070,40 @@ mod tests {
             .iter()
             .find(|entry| entry.path == alias)
             .unwrap();
+        assert_eq!(metadata.kernel_release, None);
         let expected = format!("{:x}", Sha256::digest(b"alias pci:* fixture\n"));
         assert_eq!(metadata.sha256.as_deref(), Some(expected.as_str()));
         assert!(sources
             .evidence
             .iter()
             .any(|entry| entry.kind == DriverSourceKind::FirmwareTree && entry.path == firmware));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn source_manifest_binds_metadata_to_a_kernel_release() {
+        let root = scratch();
+        let release_dir = root.join("lib/modules/6.12.0-arach");
+        fs::create_dir_all(&release_dir).unwrap();
+        let alias = release_dir.join("modules.alias");
+        fs::write(&alias, "alias pci:* fixture\n").unwrap();
+
+        let inventory = scan_inventory_with_driver_sources(
+            &root,
+            std::slice::from_ref(&alias),
+            &[],
+            &[],
+            &[],
+            &[],
+        )
+        .unwrap();
+        let metadata = inventory
+            .driver_sources
+            .evidence
+            .iter()
+            .find(|entry| entry.path == alias)
+            .unwrap();
+        assert_eq!(metadata.kernel_release.as_deref(), Some("6.12.0-arach"));
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-pub const DRIVER_SOURCE_SCHEMA: u32 = 1;
+pub const DRIVER_SOURCE_SCHEMA: u32 = 2;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -36,6 +36,12 @@ pub struct DriverAuthority {
 pub struct DriverSourceEvidence {
     pub kind: DriverSourceKind,
     pub path: PathBuf,
+    /// Kernel module metadata is scoped to the release directory it came
+    /// from.  This prevents a live-kernel table and a staged target table
+    /// with the same module names from being silently conflated.  Firmware
+    /// roots intentionally have no release scope.
+    #[serde(default)]
+    pub kernel_release: Option<String>,
     /// Metadata tables are hashed exactly.  Firmware roots are discovery
     /// scopes; exact firmware payload paths are retained per device and the
     /// signed package index supplies the install-time digest.
