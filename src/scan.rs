@@ -67,32 +67,84 @@ pub fn scan_inventory_with_modules_metadata(
 /// intentionally best-effort; a minimal live image may not ship Linux module
 /// metadata, and the signed Arach catalog remains the authoritative source.
 pub fn default_modules_alias() -> Option<PathBuf> {
-    default_modules_file("modules.alias")
+    default_modules_aliases().into_iter().next()
 }
 
 /// Locate the firmware requirement table belonging to the running Linux
 /// kernel.  It is optional because many distributions omit it from minimal
 /// live media; explicit `--modules-firmware` paths remain available.
 pub fn default_modules_firmware() -> Option<PathBuf> {
-    default_modules_file("modules.firmware")
+    default_modules_firmware_files().into_iter().next()
 }
 
-fn default_modules_file(file: &str) -> Option<PathBuf> {
-    let release = fs::read_to_string("/proc/sys/kernel/osrelease").ok()?;
-    let release = release.trim();
-    if release.is_empty() {
-        return None;
+/// Discover every regular module-alias table available to the live image.
+///
+/// A live image may have its own Linux table and a staged target kernel may
+/// have another one.  Looking at only `/proc/sys/kernel/osrelease` made the
+/// result depend on whichever kernel happened to boot Calamares.  The roots
+/// below are fixed, non-recursive staging points; the returned paths are
+/// sorted and deduplicated so the inventory remains reproducible.
+pub fn default_modules_aliases() -> Vec<PathBuf> {
+    default_modules_files("modules.alias")
+}
+
+/// Discover every regular firmware-requirement table available to the live
+/// image.  Firmware names are advisory evidence; signed Arach profiles still
+/// authorize the actual transaction.
+pub fn default_modules_firmware_files() -> Vec<PathBuf> {
+    default_modules_files("modules.firmware")
+}
+
+fn default_modules_files(file: &str) -> Vec<PathBuf> {
+    let mut roots = vec![
+        PathBuf::from("/lib/modules"),
+        PathBuf::from("/usr/lib/modules"),
+        PathBuf::from("/run/arach/target-modules"),
+        PathBuf::from("/mnt/lib/modules"),
+        PathBuf::from("/mnt/usr/lib/modules"),
+    ];
+    if let Ok(release) = fs::read_to_string("/proc/sys/kernel/osrelease") {
+        let release = release.trim();
+        if !release.is_empty() {
+            roots.extend([
+                PathBuf::from(format!("/lib/modules/{release}")),
+                PathBuf::from(format!("/usr/lib/modules/{release}")),
+            ]);
+        }
     }
-    [
-        PathBuf::from(format!("/lib/modules/{release}/{file}")),
-        PathBuf::from(format!("/usr/lib/modules/{release}/{file}")),
-    ]
-    .into_iter()
-    .find(|path| {
-        fs::symlink_metadata(path)
-            .map(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
-            .unwrap_or(false)
-    })
+
+    collect_modules_files(roots, file)
+}
+
+fn collect_modules_files(roots: impl IntoIterator<Item = PathBuf>, file: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for root in roots {
+        let direct = root.join(file);
+        if is_regular_non_symlink(&direct) {
+            paths.push(direct);
+        }
+        let Ok(entries) = fs::read_dir(&root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let candidate = path.join(file);
+                if is_regular_non_symlink(&candidate) {
+                    paths.push(candidate);
+                }
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn is_regular_non_symlink(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .map(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+        .unwrap_or(false)
 }
 
 /// Return the physical bus devices that must have a target profile before an
@@ -1479,6 +1531,27 @@ mod tests {
                 "ath12k/test.bin,iwlwifi-a.bin,iwlwifi-c.bin,iwlwifi/iwlwifi-b.bin"
             ))
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn default_metadata_discovery_is_sorted_and_includes_staged_roots() {
+        let root = scratch();
+        let first = root.join("6.1.0");
+        let second = root.join("6.6.0-arach");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        fs::write(first.join("modules.alias"), "alias pci:* first\n").unwrap();
+        fs::write(second.join("modules.alias"), "alias pci:* second\n").unwrap();
+        fs::write(second.join("modules.firmware"), "kernel/x.ko: x.bin\n").unwrap();
+
+        let aliases = collect_modules_files([root.clone()], "modules.alias");
+        assert_eq!(
+            aliases,
+            vec![first.join("modules.alias"), second.join("modules.alias")]
+        );
+        let firmware = collect_modules_files([root.clone()], "modules.firmware");
+        assert_eq!(firmware, vec![second.join("modules.firmware")]);
         fs::remove_dir_all(root).unwrap();
     }
 

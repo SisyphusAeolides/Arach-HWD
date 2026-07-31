@@ -3,7 +3,7 @@ use arach_hwd::plan::{PLAN_SCHEMA, PlanSet};
 use arach_hwd::preflight::{PREFLIGHT_SCHEMA, preflight_inventory};
 use arach_hwd::profile::resolve;
 use arach_hwd::scan::{
-    INVENTORY_SCHEMA, default_modules_alias, default_modules_firmware,
+    INVENTORY_SCHEMA, default_modules_aliases, default_modules_firmware_files,
     scan_inventory_with_modules_metadata, target_profile_required,
 };
 use arach_hwd::signature::{Keyring, load_profiles};
@@ -237,7 +237,7 @@ fn modules_aliases(arguments: &[String]) -> Result<Vec<PathBuf>, String> {
         .map(PathBuf::from)
         .collect::<Vec<_>>();
     if paths.is_empty() {
-        Ok(default_modules_alias().into_iter().collect())
+        Ok(default_modules_aliases())
     } else {
         Ok(paths)
     }
@@ -249,7 +249,7 @@ fn modules_firmware(arguments: &[String]) -> Result<Vec<PathBuf>, String> {
         .map(PathBuf::from)
         .collect::<Vec<_>>();
     if paths.is_empty() {
-        Ok(default_modules_firmware().into_iter().collect())
+        Ok(default_modules_firmware_files())
     } else {
         Ok(paths)
     }

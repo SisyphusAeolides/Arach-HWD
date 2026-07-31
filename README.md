@@ -49,9 +49,14 @@ The current command surface is deliberately read-only:
     arach-hwd plan --profiles DIR --keyring FILE --catalog-lock FILE --driver-abi 1.0 [--sysfs /sys] [--modules-alias FILE]... [--modules-firmware FILE]... [--output FILE] [--require-target-profiles]
 
 `scan` emits inventory schema 3. If the metadata options are omitted, the CLI
-uses the regular `modules.alias` and `modules.firmware` tables for the running
-kernel when they exist. Repeat either option to merge metadata from a live
-kernel and a target kernel. `preflight` emits a signed-repository query
+discovers every regular, non-symlink `modules.alias` and `modules.firmware`
+table under `/lib/modules`, `/usr/lib/modules`, `/run/arach/target-modules`,
+and staged `/mnt` module roots, including the running kernel's release
+directory. This deterministic union lets a Calamares medium compare its live
+Linux drivers with target-kernel metadata without depending on boot order.
+Repeat either option to provide an explicit live/target set (explicit paths
+must be regular files). The tables only provide candidate evidence; signed
+Arach profiles and the package index remain the authority. `preflight` emits a signed-repository query
 surface for every present capability and returns failure when a physical
 device has no bound driver. `--allow-unresolved` is intended for discovery
 tools and Calamares diagnostics; it does not authorize installation. A signed
