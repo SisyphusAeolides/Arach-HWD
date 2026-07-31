@@ -1,6 +1,6 @@
 use arach_hwd::repository::sync_catalog;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 fn main() {
     if let Err(error) = run(std::env::args().skip(1).collect()) {
@@ -72,6 +72,7 @@ fn usage() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn rejects_unknown_duplicate_or_missing_flags() {
@@ -100,6 +101,9 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(flags.len(), 4);
-        assert_eq!(PathBuf::from(&flags["output"]), PathBuf::from("/run/arach-installer/catalog"));
+        assert_eq!(
+            PathBuf::from(&flags["output"]),
+            PathBuf::from("/run/arach-installer/catalog")
+        );
     }
 }
