@@ -13,6 +13,16 @@ use std::path::{Path, PathBuf};
 pub const CATALOG_LOCK_FORMAT: u32 = 1;
 const MAX_CATALOG_LOCK_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_CATALOG_FILE_BYTES: u64 = 4 * 1024 * 1024;
+/// The live installer must carry a deterministic Linux driver metadata
+/// snapshot.  These files are discovery evidence (the signed profiles and
+/// package index remain the installation authority), but pinning their bytes
+/// prevents Calamares from silently using whichever kernel happened to boot.
+pub const REQUIRED_DRIVER_SOURCES: [&str; 4] = [
+    "driver-sources/modules.alias",
+    "driver-sources/modules.dep",
+    "driver-sources/modules.builtin",
+    "driver-sources/modules.firmware",
+];
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -27,6 +37,10 @@ pub struct CatalogLock {
     pub recipe_revision: String,
     #[serde(default)]
     pub profile: Vec<CatalogProfile>,
+    /// Hashes of the metadata snapshot used by the live hardware preflight.
+    /// Paths are relative to the catalog root (`/etc/arach/hwd`).
+    #[serde(default)]
+    pub driver_source: Vec<CatalogDriverSource>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -35,6 +49,13 @@ pub struct CatalogProfile {
     pub path: String,
     pub profile_sha256: String,
     pub signature_sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogDriverSource {
+    pub path: String,
+    pub sha256: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -111,7 +132,45 @@ pub fn verify_catalog(
             "catalog lock does not enumerate exactly the profile tree".into(),
         ));
     }
+
+    verify_driver_sources(&lock, profiles_dir)?;
     Ok(lock)
+}
+
+fn verify_driver_sources(lock: &CatalogLock, profiles_dir: &Path) -> Result<(), CatalogError> {
+    let catalog_root = profiles_dir
+        .parent()
+        .ok_or_else(|| CatalogError::Invalid("catalog profile directory has no parent".into()))?;
+    let mut listed = BTreeSet::new();
+    for source in &lock.driver_source {
+        if !listed.insert(source.path.clone()) {
+            return Err(CatalogError::Invalid(format!(
+                "duplicate catalog driver source {}",
+                source.path
+            )));
+        }
+        let relative = safe_driver_source(&source.path).ok_or_else(|| {
+            CatalogError::Invalid(format!("unsafe catalog driver source {}", source.path))
+        })?;
+        let path = catalog_root.join(relative);
+        let bytes = read_bounded(&path, MAX_CATALOG_FILE_BYTES)?;
+        if sha256(&bytes) != source.sha256 {
+            return Err(CatalogError::Invalid(format!(
+                "driver source digest differs from lock: {}",
+                source.path
+            )));
+        }
+    }
+    let expected = REQUIRED_DRIVER_SOURCES
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    if listed.iter().map(String::as_str).collect::<BTreeSet<_>>() != expected {
+        return Err(CatalogError::Invalid(
+            "catalog lock must enumerate the complete driver metadata snapshot".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_lock_shape(lock: &CatalogLock) -> Result<(), CatalogError> {
@@ -209,6 +268,23 @@ fn safe_relative(value: &str) -> Option<&Path> {
     Some(path)
 }
 
+fn safe_driver_source(value: &str) -> Option<&Path> {
+    let path = Path::new(value);
+    if !value.starts_with("driver-sources/")
+        || path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir | std::path::Component::RootDir
+            )
+        })
+        || value.ends_with('/')
+    {
+        return None;
+    }
+    Some(path)
+}
+
 fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, CatalogError> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| CatalogError::Io(format!("{}: {error}", path.display())))?;
@@ -250,22 +326,40 @@ mod tests {
         let root = scratch();
         let profiles = root.join("profiles");
         fs::create_dir_all(&profiles).unwrap();
+        let sources = root.join("driver-sources");
+        fs::create_dir_all(&sources).unwrap();
         let keyring = root.join("keys.toml");
         let profile = profiles.join("wifi.toml");
         let signature = PathBuf::from(format!("{}.sig", profile.display()));
         fs::write(&keyring, "[key]\n").unwrap();
         fs::write(&profile, "format = 1\n").unwrap();
         fs::write(&signature, "key_id = \"test\"\n").unwrap();
+        for path in REQUIRED_DRIVER_SOURCES {
+            fs::write(root.join(path), format!("{path}\n")).unwrap();
+        }
+        let sources_text = REQUIRED_DRIVER_SOURCES
+            .iter()
+            .map(|path| {
+                format!(
+                    "path = \"{path}\"\nsha256 = \"{}\"\n",
+                    sha256(&fs::read(root.join(path)).unwrap())
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n[[driver_source]]\n");
         let lock = format!(
-            "format = 1\nsnapshot = \"test\"\nkeyring_sha256 = \"{}\"\nrecipe_repository = \"https://github.com/SisyphusAeolides/Arach-Packages.git\"\nrecipe_revision = \"{}\"\n\n[[profile]]\npath = \"wifi.toml\"\nprofile_sha256 = \"{}\"\nsignature_sha256 = \"{}\"\n",
+            "format = 1\nsnapshot = \"test\"\nkeyring_sha256 = \"{}\"\nrecipe_repository = \"https://github.com/SisyphusAeolides/Arach-Packages.git\"\nrecipe_revision = \"{}\"\n\n[[profile]]\npath = \"wifi.toml\"\nprofile_sha256 = \"{}\"\nsignature_sha256 = \"{}\"\n\n[[driver_source]]\n{}\n",
             sha256(&fs::read(&keyring).unwrap()),
             "a".repeat(40),
             sha256(&fs::read(&profile).unwrap()),
             sha256(&fs::read(&signature).unwrap()),
+            sources_text,
         );
         let lock_path = root.join("catalog.lock");
         fs::write(&lock_path, lock).unwrap();
         assert!(verify_catalog(&lock_path, &profiles, &keyring).is_ok());
+        fs::write(root.join(REQUIRED_DRIVER_SOURCES[0]), "tampered\n").unwrap();
+        assert!(verify_catalog(&lock_path, &profiles, &keyring).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -274,6 +368,7 @@ mod tests {
         let root = scratch();
         let profiles = root.join("profiles");
         fs::create_dir_all(&profiles).unwrap();
+        fs::create_dir_all(root.join("driver-sources")).unwrap();
         let keyring = root.join("keys.toml");
         fs::write(&keyring, "[key]\n").unwrap();
         let lock_path = root.join("catalog.lock");

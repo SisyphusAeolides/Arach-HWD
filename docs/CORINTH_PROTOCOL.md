@@ -12,6 +12,14 @@ for an exact binary install, or build the matching pinned recipe when a binary
 record is unavailable. Both paths must match every plan digest and produce
 owned-file receipts before the target is changed.
 
+The catalog lock also contains four `driver_source` records rooted at
+`driver-sources/`: `modules.alias`, `modules.dep`, `modules.builtin`, and
+`modules.firmware`. Their bytes are hashed in the lock and are mandatory live
+installer inputs. They are discovery evidence, not installation authority;
+the signed profile and package index still authorize a transaction. The
+installer may add exact target/live metadata tables and firmware roots, but it
+must never silently replace the locked snapshot.
+
 The lock records the catalog snapshot, the keyring digest, the exact
 `recipe_repository` and full `recipe_revision` for source fallback, and the
 digest of every profile and detached signature. `arach-hwd plan` rejects additions,

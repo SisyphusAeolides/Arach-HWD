@@ -40,7 +40,14 @@ The release artifact also carries a detached-signature `package-index` for
 prebuilt driver and firmware payloads. Corinth verifies that index against the
 same scoped keyring before installation; when a signed intent is not published
 there, Corinth may use its pinned Arach-Packages recipe and still requires the
-same metadata, artifact, and source-lock digests.
+same metadata, artifact, and source-lock digests. The catalog lock also hashes
+the complete four-file Linux metadata snapshot under
+`driver-sources/` (`modules.alias`, `modules.dep`, `modules.builtin`, and
+`modules.firmware`). Calamares passes those exact files to HWD before it falls
+back to live, staged-target, or offline module roots. This means Wi-Fi, sound,
+GPU, storage, input, Bluetooth, and firmware lookup starts from a reproducible
+target-aware evidence set instead of whichever module table happened to be
+mounted first.
 
 ELAN recovery evidence is treated as health telemetry. A successful
 elan-guardian recovery keeps the device available; repeated recoveries inside
