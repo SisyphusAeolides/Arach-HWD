@@ -70,7 +70,7 @@ fn scan_pci(root: &Path, output: &mut Vec<HardwareDevice>) -> io::Result<()> {
             bus: Bus::Pci,
             sysfs_path: relative(root, &path),
             name: read_trimmed(path.join("label")),
-            modalias: read_trimmed(path.join("modalias")),
+            modalias: read_first_modalias(&[path.join("modalias"), path.join("uevent")]),
             vendor: Some(vendor),
             product: Some(product),
             subsystem_vendor: read_hex(path.join("subsystem_vendor")),
@@ -111,7 +111,7 @@ fn scan_usb(root: &Path, output: &mut Vec<HardwareDevice>) -> io::Result<()> {
             bus: Bus::Usb,
             sysfs_path: relative(root, &path),
             name,
-            modalias: read_trimmed(path.join("modalias")),
+            modalias: read_first_modalias(&[path.join("modalias"), path.join("uevent")]),
             vendor: Some(vendor),
             product: Some(product),
             subsystem_vendor: None,
@@ -134,7 +134,7 @@ fn scan_i2c(root: &Path, output: &mut Vec<HardwareDevice>) -> io::Result<()> {
             continue;
         }
         let name = read_trimmed(path.join("name"));
-        let modalias = read_trimmed(path.join("modalias"));
+        let modalias = read_first_modalias(&[path.join("modalias"), path.join("uevent")]);
         if name.is_empty() && modalias.is_empty() {
             continue;
         }
@@ -168,7 +168,7 @@ fn scan_acpi(root: &Path, output: &mut Vec<HardwareDevice>) -> io::Result<()> {
         let Some(id) = file_name(&path) else {
             continue;
         };
-        let modalias = read_trimmed(path.join("modalias"));
+        let modalias = read_first_modalias(&[path.join("modalias"), path.join("uevent")]);
         if modalias.is_empty() {
             continue;
         }
@@ -207,7 +207,7 @@ fn scan_simple_bus(
         let Some(id) = file_name(&path) else {
             continue;
         };
-        let modalias = read_first(&[
+        let modalias = read_first_modalias(&[
             path.join("modalias"),
             path.join("device/modalias"),
             path.join("uevent"),
@@ -225,7 +225,14 @@ fn scan_simple_bus(
         insert_nonempty(
             &mut properties,
             "firmware",
-            read_first(&[path.join("firmware"), path.join("device/firmware")]),
+            read_first_attribute(
+                &[
+                    path.join("firmware"),
+                    path.join("device/firmware"),
+                    path.join("uevent"),
+                ],
+                "FIRMWARE",
+            ),
         );
         insert_nonempty(
             &mut properties,
@@ -322,11 +329,15 @@ fn scan_class_devices(root: &Path, output: &mut Vec<HardwareDevice>) -> io::Resu
                 bus: Bus::Sysfs,
                 sysfs_path: relative(root, &path),
                 name,
-                modalias: read_first(&[
+                modalias: read_first_modalias(&[
                     path.join("modalias"),
                     path.join("device/modalias"),
                     target.join("modalias"),
                     target.join("device/modalias"),
+                    path.join("uevent"),
+                    path.join("device/uevent"),
+                    target.join("uevent"),
+                    target.join("device/uevent"),
                 ]),
                 vendor: read_first_hex(&[
                     path.join("vendor"),
@@ -435,6 +446,16 @@ fn class_driver_name(path: &Path, target: &Path) -> Option<String> {
     candidates
         .into_iter()
         .find_map(|candidate| driver_name_from_link(&candidate))
+        .or_else(|| {
+            [
+                path.join("uevent"),
+                path.join("device/uevent"),
+                target.join("uevent"),
+                target.join("device/uevent"),
+            ]
+            .into_iter()
+            .find_map(|candidate| read_uevent_field(&candidate, "DRIVER"))
+        })
 }
 
 fn is_virtual_block(id: &str, target: &Path) -> bool {
@@ -459,6 +480,36 @@ fn read_first(paths: &[PathBuf]) -> String {
         .map(|path| read_trimmed(path.clone()))
         .find(|value| !value.is_empty())
         .unwrap_or_default()
+}
+
+/// Read a plain sysfs attribute, or a named field from a `uevent` file.  A
+/// uevent file contains multiple `KEY=value` records, so returning the whole
+/// file as a device modalias would create a lookup string that no profile can
+/// safely match.
+fn read_first_attribute(paths: &[PathBuf], key: &str) -> String {
+    paths
+        .iter()
+        .find_map(|path| {
+            let value = if path.file_name().and_then(|name| name.to_str()) == Some("uevent") {
+                read_uevent_field(path, key).unwrap_or_default()
+            } else {
+                read_trimmed(path.clone())
+            };
+            (!value.is_empty()).then_some(value)
+        })
+        .unwrap_or_default()
+}
+
+fn read_first_modalias(paths: &[PathBuf]) -> String {
+    read_first_attribute(paths, "MODALIAS")
+}
+
+fn read_uevent_field(path: &Path, key: &str) -> Option<String> {
+    let text = fs::read_to_string(path).ok()?;
+    text.lines().find_map(|line| {
+        let (field, value) = line.split_once('=')?;
+        (field == key && !value.trim().is_empty()).then(|| value.trim().to_owned())
+    })
 }
 
 fn read_first_hex(paths: &[PathBuf]) -> Option<u32> {
@@ -737,10 +788,9 @@ fn read_hex(path: PathBuf) -> Option<u32> {
 
 fn driver_name(path: &Path) -> Option<String> {
     fs::canonicalize(path.join("driver"))
-        .ok()?
-        .file_name()?
-        .to_str()
-        .map(ToOwned::to_owned)
+        .ok()
+        .and_then(|driver| driver.file_name()?.to_str().map(ToOwned::to_owned))
+        .or_else(|| read_uevent_field(&path.join("uevent"), "DRIVER"))
 }
 
 fn insert_nonempty(properties: &mut BTreeMap<String, String>, key: &str, value: String) {
@@ -946,7 +996,11 @@ mod tests {
             fs::create_dir_all(path).unwrap();
         }
         fs::write(platform.join("name"), "i8042\n").unwrap();
-        fs::write(platform.join("modalias"), "platform:i8042\n").unwrap();
+        fs::write(
+            platform.join("uevent"),
+            "MODALIAS=platform:i8042\nDRIVER=i8042\nFIRMWARE=i8042.bin\n",
+        )
+        .unwrap();
         fs::write(spi.join("name"), "ELAN touchscreen\n").unwrap();
         fs::write(spi.join("modalias"), "spi:elan\n").unwrap();
         fs::write(serio.join("name"), "i8042 Kbd Port\n").unwrap();
@@ -975,6 +1029,20 @@ mod tests {
             inventory.devices.iter().any(|device| {
                 device.key == "hid:0003:04F3:1234.0001" && device.bus == Bus::Hid
             })
+        );
+        let platform_device = inventory
+            .devices
+            .iter()
+            .find(|device| device.key == "platform:i8042")
+            .unwrap();
+        assert_eq!(platform_device.modalias, "platform:i8042");
+        assert_eq!(platform_device.driver.as_deref(), Some("i8042"));
+        assert_eq!(
+            platform_device
+                .properties
+                .get("firmware")
+                .map(String::as_str),
+            Some("i8042.bin")
         );
         let input = inventory
             .capabilities
