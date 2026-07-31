@@ -12,8 +12,9 @@ for an exact binary install, or build the matching pinned recipe when a binary
 record is unavailable. Both paths must match every plan digest and produce
 owned-file receipts before the target is changed.
 
-The lock records the catalog snapshot, the keyring digest, and the digest of
-every profile and detached signature. `arach-hwd plan` rejects additions,
+The lock records the catalog snapshot, the keyring digest, the exact
+`recipe_repository` and full `recipe_revision` for source fallback, and the
+digest of every profile and detached signature. `arach-hwd plan` rejects additions,
 removals, symlinks, or byte changes before it resolves a device. A release
 catalog must enumerate at least one signed profile; an empty profile tree is
 not a valid installer input because it cannot provision Wi-Fi, audio, graphics,

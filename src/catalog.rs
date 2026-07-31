@@ -20,6 +20,11 @@ pub struct CatalogLock {
     pub format: u32,
     pub snapshot: String,
     pub keyring_sha256: String,
+    /// Exact signed recipe authority used when a binary hardware artifact is
+    /// unavailable.  Keeping this in the catalog lock avoids embedding a
+    /// moving package-repository revision in the installer binary.
+    pub recipe_repository: String,
+    pub recipe_revision: String,
     #[serde(default)]
     pub profile: Vec<CatalogProfile>,
 }
@@ -125,6 +130,16 @@ fn validate_lock_shape(lock: &CatalogLock) -> Result<(), CatalogError> {
             "catalog keyring digest is not SHA-256".into(),
         ));
     }
+    if lock.recipe_repository != "https://github.com/SisyphusAeolides/Arach-Packages.git" {
+        return Err(CatalogError::Invalid(
+            "catalog recipe repository is not the signed Arach-Packages authority".into(),
+        ));
+    }
+    if !valid_git_revision(&lock.recipe_revision) {
+        return Err(CatalogError::Invalid(
+            "catalog recipe revision is not a full Git object id".into(),
+        ));
+    }
     for profile in &lock.profile {
         if !valid_digest(&profile.profile_sha256) || !valid_digest(&profile.signature_sha256) {
             return Err(CatalogError::Invalid(format!(
@@ -134,6 +149,10 @@ fn validate_lock_shape(lock: &CatalogLock) -> Result<(), CatalogError> {
         }
     }
     Ok(())
+}
+
+fn valid_git_revision(value: &str) -> bool {
+    value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn collect_profiles(
@@ -238,8 +257,9 @@ mod tests {
         fs::write(&profile, "format = 1\n").unwrap();
         fs::write(&signature, "key_id = \"test\"\n").unwrap();
         let lock = format!(
-            "format = 1\nsnapshot = \"test\"\nkeyring_sha256 = \"{}\"\n\n[[profile]]\npath = \"wifi.toml\"\nprofile_sha256 = \"{}\"\nsignature_sha256 = \"{}\"\n",
+            "format = 1\nsnapshot = \"test\"\nkeyring_sha256 = \"{}\"\nrecipe_repository = \"https://github.com/SisyphusAeolides/Arach-Packages.git\"\nrecipe_revision = \"{}\"\n\n[[profile]]\npath = \"wifi.toml\"\nprofile_sha256 = \"{}\"\nsignature_sha256 = \"{}\"\n",
             sha256(&fs::read(&keyring).unwrap()),
+            "a".repeat(40),
             sha256(&fs::read(&profile).unwrap()),
             sha256(&fs::read(&signature).unwrap()),
         );
@@ -260,8 +280,9 @@ mod tests {
         fs::write(
             &lock_path,
             format!(
-                "format = 1\nsnapshot = \"empty\"\nkeyring_sha256 = \"{}\"\n",
-                sha256(&fs::read(&keyring).unwrap())
+                "format = 1\nsnapshot = \"empty\"\nkeyring_sha256 = \"{}\"\nrecipe_repository = \"https://github.com/SisyphusAeolides/Arach-Packages.git\"\nrecipe_revision = \"{}\"\n",
+                sha256(&fs::read(&keyring).unwrap()),
+                "a".repeat(40),
             ),
         )
         .unwrap();

@@ -98,8 +98,10 @@ the hashed `modules.alias`, `modules.dep`, `modules.builtin`, and
 `modules.firmware` files that were consulted, the firmware discovery roots,
 and the immutable authorities used for the next lookup. The Arach-HWD and
 Arach-Packages repositories are the only install authorities; Linux kernel and
-linux-firmware trees are broad, advisory reference sources. This makes a
-Calamares run auditable and reproducible without allowing a random upstream
+linux-firmware trees are broad, advisory reference sources. The signed catalog
+lock carries the exact Arach-Packages repository revision used for source
+fallback, so the installer does not embed a moving package commit. This makes
+a Calamares run auditable and reproducible without allowing a random upstream
 module or firmware filename to become an install plan.
 
 ## Validation
