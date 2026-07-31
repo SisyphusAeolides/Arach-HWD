@@ -34,7 +34,10 @@ audio, graphics, storage, input, Bluetooth, and firmware. Each unresolved
 physical device carries its stable key, bus, vendor/product/class identity,
 and kernel modalias. It may also include deterministic `modules.alias` driver
 matches and `modules.firmware`/`modules.builtin.modinfo` firmware names from
-one or more live/target kernel metadata sets, the exact metadata table that
+one or more live/target kernel metadata sets. NUL-separated
+`modules.builtin.modinfo` `module.alias=` records are alias evidence too, so
+target kernels without a generated `modules.alias` remain discoverable. The
+exact metadata table that
 produced each candidate,
 plus exact module payload/dependency/builtin paths and firmware files found
 under the supplied live/target roots. Firmware aliases are followed only when

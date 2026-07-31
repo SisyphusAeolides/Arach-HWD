@@ -116,7 +116,12 @@ pub fn scan_inventory_with_driver_sources(
     devices.sort_by(|left, right| left.key.cmp(&right.key));
     devices.dedup_by(|left, right| left.key == right.key);
     if !modules_alias.is_empty() {
-        annotate_linux_driver_candidates(&mut devices, modules_alias)?;
+        annotate_linux_driver_candidates(&mut devices, modules_alias, modules_firmware)?;
+    } else if !modules_firmware.is_empty() {
+        // Built-in modules can carry their own modalias records in
+        // `modules.builtin.modinfo`; they are a complete alias source even
+        // when a minimal target tree omits the generated modules.alias file.
+        annotate_linux_driver_candidates(&mut devices, &[], modules_firmware)?;
     }
     if !modules_firmware.is_empty() || !firmware_roots.is_empty() {
         annotate_linux_firmware_candidates(&mut devices, modules_firmware)?;
@@ -903,11 +908,28 @@ struct LinuxAlias {
 fn annotate_linux_driver_candidates(
     devices: &mut [HardwareDevice],
     modules_alias: &[PathBuf],
+    modules_firmware: &[PathBuf],
 ) -> io::Result<()> {
     let mut aliases = Vec::new();
     for path in modules_alias {
         let text = read_modules_metadata(path, MAX_MODULES_ALIAS_BYTES, "modules alias")?;
         let mut parsed = parse_modules_alias(&text);
+        for alias in &mut parsed {
+            alias.source = path.clone();
+        }
+        aliases.extend(parsed);
+    }
+    // A built-in driver has no .ko payload to put in modules.dep, and some
+    // target images ship only the NUL-separated modinfo table.  Its
+    // `module.alias=pattern` records are semantically equivalent to a line
+    // in modules.alias and must participate in the same modalias lookup.
+    for path in modules_firmware {
+        if path.file_name().and_then(|name| name.to_str()) != Some("modules.builtin.modinfo") {
+            continue;
+        }
+        let text =
+            read_modules_metadata(path, MAX_MODULES_FIRMWARE_BYTES, "modules builtin modinfo")?;
+        let mut parsed = parse_modules_builtin_modinfo_aliases(&text);
         for alias in &mut parsed {
             alias.source = path.clone();
         }
@@ -1393,6 +1415,39 @@ fn parse_modules_alias(text: &str) -> Vec<LinuxAlias> {
             .cmp(&right.pattern)
             .then_with(|| left.driver.cmp(&right.driver))
     });
+    aliases
+}
+
+fn parse_modules_builtin_modinfo_aliases(text: &str) -> Vec<LinuxAlias> {
+    let mut aliases = Vec::new();
+    for record in text.split('\0') {
+        let Some((key, pattern)) = record.split_once('=') else {
+            continue;
+        };
+        let Some(driver) = key.strip_suffix(".alias") else {
+            continue;
+        };
+        let driver = canonical_module_name(driver);
+        if driver.is_empty() || pattern.is_empty() || !valid_driver_candidate(&driver) {
+            continue;
+        }
+        aliases.push(LinuxAlias {
+            pattern: pattern.to_owned(),
+            driver,
+            literal_prefix: pattern
+                .bytes()
+                .take_while(|byte| !matches!(byte, b'*' | b'?'))
+                .map(char::from)
+                .collect(),
+            source: PathBuf::new(),
+        });
+    }
+    aliases.sort_by(|left, right| {
+        left.pattern
+            .cmp(&right.pattern)
+            .then_with(|| left.driver.cmp(&right.driver))
+    });
+    aliases.dedup_by(|left, right| left.pattern == right.pattern && left.driver == right.driver);
     aliases
 }
 
@@ -2509,6 +2564,50 @@ mod tests {
                 .properties
                 .get("linux_firmware_files")
                 .is_some_and(|value| value.contains("wifi/builtin.bin="))
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn builtin_modinfo_alias_records_cover_missing_modules_alias() {
+        let root = scratch();
+        let pci = root.join("bus/pci/devices/0000:00:14.3");
+        fs::create_dir_all(&pci).unwrap();
+        fs::write(pci.join("vendor"), "8086\n").unwrap();
+        fs::write(pci.join("device"), "2723\n").unwrap();
+        fs::write(
+            pci.join("modalias"),
+            "pci:v00008086d00002723sv00001028sd00000001bc02sc80i00\n",
+        )
+        .unwrap();
+        let modinfo = root.join("modules.builtin.modinfo");
+        fs::write(
+            &modinfo,
+            b"builtin_wifi.alias=pci:v00008086d00002723*\0builtin_wifi.firmware=wifi/builtin.bin\0",
+        )
+        .unwrap();
+
+        let inventory = scan_inventory_with_driver_sources(
+            &root,
+            &[],
+            std::slice::from_ref(&modinfo),
+            &[],
+            &[],
+            &[],
+        )
+        .unwrap();
+        let device = inventory
+            .devices
+            .iter()
+            .find(|device| device.key == "pci:0000:00:14.3")
+            .unwrap();
+        assert_eq!(
+            device.properties.get("linux_driver_candidates"),
+            Some(&String::from("builtin_wifi"))
+        );
+        assert_eq!(
+            device.properties.get("linux_driver_candidate_sources"),
+            Some(&format!("builtin_wifi={}", modinfo.display()))
         );
         fs::remove_dir_all(root).unwrap();
     }

@@ -16,7 +16,10 @@ scanner records sorted matching driver candidates, exact module payload paths,
 built-in status, and firmware requirements for each modalias. The modinfo
 table closes the built-in-driver gap: Linux emits firmware requirements for
 compiled-in modules there as NUL-separated records rather than in
-`modules.firmware`. It also resolves those firmware names against
+`modules.firmware`; its `module.alias=` records are also alias evidence, so a
+target tree without a generated `modules.alias` still contributes built-in
+Wi-Fi, audio, storage, graphics, input, and Bluetooth driver matches. It also
+resolves those firmware names against
 the live and staged target firmware roots and records every exact path found,
 including common compressed forms. Multiple metadata tables and firmware roots
 may be supplied (for example, the live kernel and the target Arach kernel), so
