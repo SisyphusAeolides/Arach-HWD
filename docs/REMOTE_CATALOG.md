@@ -70,6 +70,8 @@ arach-hwd-catalog-sync \
   --output /run/arach-installer/catalog
 ```
 
+The sync command requires `curl` in the live environment and invokes it
+directly with HTTPS-only protocol restrictions; no shell command is used.
 The output path must be absolute, must not already exist, and must have a real
 non-symlink parent. Callers then pass these verified paths to normal HWD and
 Corinth operations:
