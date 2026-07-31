@@ -36,6 +36,23 @@ pub fn scan_inventory_with_modules_metadata(
     modules_alias: &[PathBuf],
     modules_firmware: &[PathBuf],
 ) -> io::Result<Inventory> {
+    scan_inventory_with_driver_metadata(sysfs_root, modules_alias, modules_firmware, &[], &[])
+}
+
+/// Scan hardware and annotate it with the complete driver metadata surface
+/// available to the installer.  `modules.alias` identifies modules that can
+/// bind a modalias; `modules.dep` supplies the exact module payload paths and
+/// `modules.builtin` records candidates compiled into the target kernel.
+/// Keeping these inputs separate preserves the old API while letting a
+/// Calamares medium compare live and staged target kernels without guessing a
+/// package name or mistaking a built-in driver for a missing module.
+pub fn scan_inventory_with_driver_metadata(
+    sysfs_root: &Path,
+    modules_alias: &[PathBuf],
+    modules_firmware: &[PathBuf],
+    modules_dep: &[PathBuf],
+    modules_builtin: &[PathBuf],
+) -> io::Result<Inventory> {
     let mut devices = Vec::new();
     scan_pci(sysfs_root, &mut devices)?;
     scan_usb(sysfs_root, &mut devices)?;
@@ -53,6 +70,9 @@ pub fn scan_inventory_with_modules_metadata(
     }
     if !modules_firmware.is_empty() {
         annotate_linux_firmware_candidates(&mut devices, modules_firmware)?;
+    }
+    if !modules_dep.is_empty() || !modules_builtin.is_empty() {
+        annotate_linux_driver_files(&mut devices, modules_dep, modules_builtin)?;
     }
     let capabilities = capability_requirements(&devices);
     Ok(Inventory {
@@ -93,6 +113,19 @@ pub fn default_modules_aliases() -> Vec<PathBuf> {
 /// authorize the actual transaction.
 pub fn default_modules_firmware_files() -> Vec<PathBuf> {
     default_modules_files("modules.firmware")
+}
+
+/// Locate every module-to-payload dependency table available to the live
+/// medium and staged target kernels.
+pub fn default_modules_dep_files() -> Vec<PathBuf> {
+    default_modules_files("modules.dep")
+}
+
+/// Locate every built-in module table available to the live medium and staged
+/// target kernels.  Built-ins do not need a separate package, but recording
+/// them makes the target coverage decision explicit and reproducible.
+pub fn default_modules_builtin_files() -> Vec<PathBuf> {
+    default_modules_files("modules.builtin")
 }
 
 fn default_modules_files(file: &str) -> Vec<PathBuf> {
@@ -636,6 +669,7 @@ fn read_first_hex(paths: &[PathBuf]) -> Option<u32> {
 const MAX_MODULES_ALIAS_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_MODULES_FIRMWARE_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_DRIVER_CANDIDATES: usize = 32;
+const MAX_DRIVER_FILES: usize = 64;
 const MAX_FIRMWARE_CANDIDATES: usize = 64;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -681,6 +715,132 @@ fn annotate_linux_driver_candidates(
         }
     }
     Ok(())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ModulePayload {
+    module: String,
+    path: String,
+}
+
+/// Bind modalias candidates to the exact module payloads advertised by every
+/// supplied `modules.dep` table.  The encoded property is intentionally a
+/// small, deterministic wire format (`module=path|path,...`) so existing
+/// inventory consumers can ignore it while Corinth/profile tooling can use it
+/// to distinguish a target module from a merely live-kernel candidate.
+fn annotate_linux_driver_files(
+    devices: &mut [HardwareDevice],
+    modules_dep: &[PathBuf],
+    modules_builtin: &[PathBuf],
+) -> io::Result<()> {
+    let mut payloads = BTreeMap::<String, BTreeSet<String>>::new();
+    for path in modules_dep {
+        let text = read_modules_metadata(path, MAX_MODULES_ALIAS_BYTES, "modules dependency")?;
+        for payload in parse_modules_dep(&text) {
+            payloads
+                .entry(payload.module)
+                .or_default()
+                .insert(payload.path);
+        }
+    }
+    let mut builtins = BTreeSet::new();
+    for path in modules_builtin {
+        let text = read_modules_metadata(path, MAX_MODULES_ALIAS_BYTES, "modules builtin")?;
+        builtins.extend(parse_modules_builtin(&text));
+    }
+
+    for device in devices {
+        let mut drivers = BTreeSet::new();
+        if let Some(value) = device.properties.get("linux_driver_candidates") {
+            drivers.extend(value.split(',').map(canonical_module_name));
+        }
+        if let Some(driver) = &device.driver {
+            drivers.insert(canonical_module_name(driver));
+        }
+
+        let mut files = BTreeMap::<String, BTreeSet<String>>::new();
+        let mut builtin_candidates = BTreeSet::new();
+        for driver in drivers {
+            if let Some(paths) = payloads.get(&driver) {
+                files.insert(driver.clone(), paths.clone());
+            }
+            if builtins.contains(&driver) {
+                builtin_candidates.insert(driver);
+            }
+        }
+        if !files.is_empty() {
+            let encoded = files
+                .into_iter()
+                .flat_map(|(module, paths)| {
+                    paths
+                        .into_iter()
+                        .map(move |path| format!("{module}={path}"))
+                })
+                .take(MAX_DRIVER_FILES)
+                .collect::<Vec<_>>()
+                .join(",");
+            if !encoded.is_empty() {
+                device
+                    .properties
+                    .insert("linux_driver_files".into(), encoded);
+            }
+        }
+        if !builtin_candidates.is_empty() {
+            device.properties.insert(
+                "linux_driver_builtins".into(),
+                builtin_candidates.into_iter().collect::<Vec<_>>().join(","),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn parse_modules_dep(text: &str) -> Vec<ModulePayload> {
+    let mut records = Vec::new();
+    for line in text.lines() {
+        let Some((module_path, _dependencies)) = line.split_once(':') else {
+            continue;
+        };
+        let module_path = module_path.trim();
+        if !valid_module_path(module_path) {
+            continue;
+        }
+        records.push(ModulePayload {
+            module: canonical_module_name(module_path),
+            path: module_path.to_owned(),
+        });
+    }
+    records.sort_by(|left, right| {
+        left.module
+            .cmp(&right.module)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    records.dedup_by(|left, right| left.module == right.module && left.path == right.path);
+    records
+}
+
+fn parse_modules_builtin(text: &str) -> Vec<String> {
+    let mut modules = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| valid_module_path(line))
+        .map(canonical_module_name)
+        .filter(|module| !module.is_empty())
+        .collect::<Vec<_>>();
+    modules.sort();
+    modules.dedup();
+    modules
+}
+
+fn valid_module_path(value: &str) -> bool {
+    !value.is_empty()
+        && !Path::new(value).is_absolute()
+        && !Path::new(value)
+            .components()
+            .any(|component| component == std::path::Component::ParentDir)
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/'))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1530,6 +1690,51 @@ mod tests {
             Some(&String::from(
                 "ath12k/test.bin,iwlwifi-a.bin,iwlwifi-c.bin,iwlwifi/iwlwifi-b.bin"
             ))
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn driver_payloads_and_builtins_are_bound_to_candidates() {
+        let root = scratch();
+        let pci = root.join("bus/pci/devices/0000:00:14.3");
+        fs::create_dir_all(&pci).unwrap();
+        fs::write(pci.join("vendor"), "8086\n").unwrap();
+        fs::write(pci.join("device"), "2723\n").unwrap();
+        fs::write(
+            pci.join("modalias"),
+            "pci:v00008086d00002723sv00001028sd00000001bc02sc80i00\n",
+        )
+        .unwrap();
+        let aliases = root.join("modules.alias");
+        fs::write(&aliases, "alias pci:v00008086d00002723* iwlwifi\n").unwrap();
+        let deps = root.join("modules.dep");
+        fs::write(
+            &deps,
+            "kernel/drivers/net/wireless/iwlwifi.ko.xz: kernel/drivers/core.ko\n\
+             kernel/drivers/net/wireless/iwlwifi.ko.xz:\n",
+        )
+        .unwrap();
+        let builtin = root.join("modules.builtin");
+        fs::write(&builtin, "kernel/drivers/net/wireless/iwlwifi.ko\n").unwrap();
+
+        let inventory =
+            scan_inventory_with_driver_metadata(&root, &[aliases], &[], &[deps], &[builtin])
+                .unwrap();
+        let device = inventory
+            .devices
+            .iter()
+            .find(|device| device.key == "pci:0000:00:14.3")
+            .unwrap();
+        assert_eq!(
+            device.properties.get("linux_driver_files"),
+            Some(&String::from(
+                "iwlwifi=kernel/drivers/net/wireless/iwlwifi.ko.xz"
+            ))
+        );
+        assert_eq!(
+            device.properties.get("linux_driver_builtins"),
+            Some(&String::from("iwlwifi"))
         );
         fs::remove_dir_all(root).unwrap();
     }

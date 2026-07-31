@@ -8,13 +8,16 @@ the exact bus/modalias identity Corinth needs to find a signed driver or
 firmware artifact. It never invents a package name from a class: unresolved
 hardware is emitted as a deterministic lookup query and is a hard preflight
 failure unless the caller explicitly asks for an inventory-only report.
-When regular Linux `modules.alias` and `modules.firmware` tables are available,
-the scanner also records sorted matching driver and firmware candidates for
-each modalias. Multiple tables may be supplied (for example, the live kernel
-and the target Arach kernel), so a driver present only in the target image is
-still visible during Calamares preflight. Candidates help maintainers close
-catalog gaps; they are advisory evidence and never authorize an install or
-bypass a signed Arach profile.
+When regular Linux `modules.alias`, `modules.dep`, `modules.builtin`, and
+`modules.firmware` tables are available, the scanner records sorted matching
+driver candidates, exact module payload paths, built-in status, and firmware
+requirements for each modalias. Multiple tables may be supplied (for example,
+the live kernel and the target Arach kernel), so a driver present only in the
+target image is still visible during Calamares preflight. This is the complete
+metadata surface available from a kernel image; it does not pretend that a
+missing signed Arach profile or firmware artifact is installable. Candidates
+help maintainers close catalog gaps and remain advisory evidence until a
+signed profile and package intent authorize a transaction.
 
 Profiles cannot execute shell commands. Driver and firmware intents must use
 the signed Arach hardware repository, include artifact, metadata, and source
@@ -43,17 +46,22 @@ quarantined states instead of resetting the controller forever.
 
 The current command surface is deliberately read-only:
 
-    arach-hwd scan [--sysfs /sys] [--modules-alias FILE]... [--modules-firmware FILE]...
-    arach-hwd preflight [--sysfs /sys] [--modules-alias FILE]... [--modules-firmware FILE]... [--output FILE]
-    arach-hwd preflight [--sysfs /sys] [--modules-alias FILE]... [--modules-firmware FILE]... --allow-unresolved
-    arach-hwd plan --profiles DIR --keyring FILE --catalog-lock FILE --driver-abi 1.0 [--sysfs /sys] [--modules-alias FILE]... [--modules-firmware FILE]... [--output FILE] [--require-target-profiles]
+    arach-hwd scan [--sysfs /sys] [--modules-alias FILE]... [--modules-firmware FILE]... [--modules-dep FILE]... [--modules-builtin FILE]...
+    arach-hwd preflight [--sysfs /sys] [--modules-alias FILE]... [--modules-firmware FILE]... [--modules-dep FILE]... [--modules-builtin FILE]... [--output FILE]
+    arach-hwd preflight [--sysfs /sys] [--modules-alias FILE]... [--modules-firmware FILE]... [--modules-dep FILE]... [--modules-builtin FILE]... --allow-unresolved
+    arach-hwd plan --profiles DIR --keyring FILE --catalog-lock FILE --driver-abi 1.0 [--sysfs /sys] [--modules-alias FILE]... [--modules-firmware FILE]... [--modules-dep FILE]... [--modules-builtin FILE]... [--output FILE] [--require-target-profiles]
 
 `scan` emits inventory schema 3. If the metadata options are omitted, the CLI
-discovers every regular, non-symlink `modules.alias` and `modules.firmware`
+discovers every regular, non-symlink `modules.alias`, `modules.dep`,
+`modules.builtin`, and `modules.firmware`
 table under `/lib/modules`, `/usr/lib/modules`, `/run/arach/target-modules`,
 and staged `/mnt` module roots, including the running kernel's release
 directory. This deterministic union lets a Calamares medium compare its live
-Linux drivers with target-kernel metadata without depending on boot order.
+Linux drivers with target-kernel metadata without depending on boot order. The
+inventory properties `linux_driver_files` and `linux_driver_builtins` preserve
+the target module payload evidence so Wi-Fi, audio, graphics, storage, input,
+and Bluetooth profiles can be audited against exact files rather than a class
+name or the live kernel's current binding.
 Repeat either option to provide an explicit live/target set (explicit paths
 must be regular files). The tables only provide candidate evidence; signed
 Arach profiles and the package index remain the authority. `preflight` emits a signed-repository query

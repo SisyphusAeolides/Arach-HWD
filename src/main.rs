@@ -3,8 +3,9 @@ use arach_hwd::plan::{PLAN_SCHEMA, PlanSet};
 use arach_hwd::preflight::{PREFLIGHT_SCHEMA, preflight_inventory};
 use arach_hwd::profile::resolve;
 use arach_hwd::scan::{
-    INVENTORY_SCHEMA, default_modules_aliases, default_modules_firmware_files,
-    scan_inventory_with_modules_metadata, target_profile_required,
+    INVENTORY_SCHEMA, default_modules_aliases, default_modules_builtin_files,
+    default_modules_dep_files, default_modules_firmware_files, scan_inventory_with_driver_metadata,
+    target_profile_required,
 };
 use arach_hwd::signature::{Keyring, load_profiles};
 use std::collections::BTreeSet;
@@ -39,6 +40,8 @@ fn preflight_command(arguments: &[String]) -> Result<(), String> {
     let sysfs = option(arguments, "--sysfs")?.unwrap_or_else(|| "/sys".into());
     let modules_alias = modules_aliases(arguments)?;
     let modules_firmware = modules_firmware(arguments)?;
+    let modules_dep = modules_dep(arguments)?;
+    let modules_builtin = modules_builtin(arguments)?;
     let output_path = option(arguments, "--output")?;
     let allow_unresolved = has_flag(arguments, "--allow-unresolved")?;
     reject_unknown_with_flags(
@@ -47,14 +50,18 @@ fn preflight_command(arguments: &[String]) -> Result<(), String> {
             "--sysfs",
             "--modules-alias",
             "--modules-firmware",
+            "--modules-dep",
+            "--modules-builtin",
             "--output",
         ],
         &["--allow-unresolved"],
     )?;
-    let inventory = scan_inventory_with_modules_metadata(
+    let inventory = scan_inventory_with_driver_metadata(
         &PathBuf::from(sysfs),
         &modules_alias,
         &modules_firmware,
+        &modules_dep,
+        &modules_builtin,
     )
     .map_err(|error| error.to_string())?;
     if inventory.schema != INVENTORY_SCHEMA {
@@ -89,14 +96,24 @@ fn scan_command(arguments: &[String]) -> Result<(), String> {
     let sysfs = option(arguments, "--sysfs")?.unwrap_or_else(|| "/sys".into());
     let modules_alias = modules_aliases(arguments)?;
     let modules_firmware = modules_firmware(arguments)?;
+    let modules_dep = modules_dep(arguments)?;
+    let modules_builtin = modules_builtin(arguments)?;
     reject_unknown(
         arguments,
-        &["--sysfs", "--modules-alias", "--modules-firmware"],
+        &[
+            "--sysfs",
+            "--modules-alias",
+            "--modules-firmware",
+            "--modules-dep",
+            "--modules-builtin",
+        ],
     )?;
-    let inventory = scan_inventory_with_modules_metadata(
+    let inventory = scan_inventory_with_driver_metadata(
         &PathBuf::from(sysfs),
         &modules_alias,
         &modules_firmware,
+        &modules_dep,
+        &modules_builtin,
     )
     .map_err(|error| error.to_string())?;
     let output = toml::to_string_pretty(&inventory).map_err(|error| error.to_string())?;
@@ -108,6 +125,8 @@ fn plan_command(arguments: &[String]) -> Result<(), String> {
     let sysfs = option(arguments, "--sysfs")?.unwrap_or_else(|| "/sys".into());
     let modules_alias = modules_aliases(arguments)?;
     let modules_firmware = modules_firmware(arguments)?;
+    let modules_dep = modules_dep(arguments)?;
+    let modules_builtin = modules_builtin(arguments)?;
     let profile_dir = option(arguments, "--profiles")?
         .ok_or_else(|| "plan requires --profiles DIR".to_owned())?;
     let keyring_path =
@@ -124,6 +143,8 @@ fn plan_command(arguments: &[String]) -> Result<(), String> {
             "--sysfs",
             "--modules-alias",
             "--modules-firmware",
+            "--modules-dep",
+            "--modules-builtin",
             "--profiles",
             "--keyring",
             "--catalog-lock",
@@ -132,10 +153,12 @@ fn plan_command(arguments: &[String]) -> Result<(), String> {
         ],
         &["--require-target-profiles"],
     )?;
-    let inventory = scan_inventory_with_modules_metadata(
+    let inventory = scan_inventory_with_driver_metadata(
         &PathBuf::from(sysfs),
         &modules_alias,
         &modules_firmware,
+        &modules_dep,
+        &modules_builtin,
     )
     .map_err(|error| error.to_string())?;
     verify_catalog(
@@ -255,6 +278,30 @@ fn modules_firmware(arguments: &[String]) -> Result<Vec<PathBuf>, String> {
     }
 }
 
+fn modules_dep(arguments: &[String]) -> Result<Vec<PathBuf>, String> {
+    let paths = options(arguments, "--modules-dep")?
+        .into_iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    if paths.is_empty() {
+        Ok(default_modules_dep_files())
+    } else {
+        Ok(paths)
+    }
+}
+
+fn modules_builtin(arguments: &[String]) -> Result<Vec<PathBuf>, String> {
+    let paths = options(arguments, "--modules-builtin")?
+        .into_iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    if paths.is_empty() {
+        Ok(default_modules_builtin_files())
+    } else {
+        Ok(paths)
+    }
+}
+
 fn options(arguments: &[String], name: &str) -> Result<Vec<String>, String> {
     let mut values = Vec::new();
     let mut index = 0;
@@ -324,5 +371,5 @@ fn has_flag(arguments: &[String], name: &str) -> Result<bool, String> {
 }
 
 fn usage() -> String {
-    "usage: arach-hwd scan [--sysfs ROOT] [--modules-alias FILE]... [--modules-firmware FILE]... | arach-hwd preflight [--sysfs ROOT] [--modules-alias FILE]... [--modules-firmware FILE]... [--output FILE] [--allow-unresolved] | arach-hwd plan --profiles DIR --keyring FILE --catalog-lock FILE --driver-abi MAJOR.MINOR [--sysfs ROOT] [--modules-alias FILE]... [--modules-firmware FILE]... [--output FILE] [--require-target-profiles]".into()
+    "usage: arach-hwd scan [--sysfs ROOT] [--modules-alias FILE]... [--modules-firmware FILE]... [--modules-dep FILE]... [--modules-builtin FILE]... | arach-hwd preflight [--sysfs ROOT] [--modules-alias FILE]... [--modules-firmware FILE]... [--modules-dep FILE]... [--modules-builtin FILE]... [--output FILE] [--allow-unresolved] | arach-hwd plan --profiles DIR --keyring FILE --catalog-lock FILE --driver-abi MAJOR.MINOR [--sysfs ROOT] [--modules-alias FILE]... [--modules-firmware FILE]... [--modules-dep FILE]... [--modules-builtin FILE]... [--output FILE] [--require-target-profiles]".into()
 }
