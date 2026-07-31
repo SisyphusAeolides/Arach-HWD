@@ -8,6 +8,7 @@ pub mod preflight;
 pub mod profile;
 pub mod scan;
 pub mod signature;
+pub mod sources;
 
 pub use facts::{
     Bus, CapabilityRequirement, HardwareCapability, HardwareDevice, Inventory, SystemFacts,
@@ -22,4 +23,8 @@ pub use scan::{
     default_modules_firmware_files, scan_inventory, scan_inventory_with_driver_metadata,
     scan_inventory_with_driver_sources, scan_inventory_with_modules_alias,
     scan_inventory_with_modules_metadata,
+};
+pub use sources::{
+    DRIVER_SOURCE_SCHEMA, DriverAuthority, DriverSourceEvidence, DriverSourceKind,
+    DriverSourceManifest,
 };

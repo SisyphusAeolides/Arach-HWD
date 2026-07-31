@@ -1,12 +1,14 @@
 use crate::facts::{
     Bus, CapabilityRequirement, HardwareCapability, HardwareDevice, Inventory, SystemFacts,
 };
+use crate::sources::{DriverSourceEvidence, DriverSourceKind, DriverSourceManifest};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-pub const INVENTORY_SCHEMA: u32 = 3;
+pub const INVENTORY_SCHEMA: u32 = 4;
 
 pub fn scan_inventory(sysfs_root: &Path) -> io::Result<Inventory> {
     scan_inventory_with_modules_metadata(sysfs_root, &[], &[])
@@ -105,8 +107,69 @@ pub fn scan_inventory_with_driver_sources(
         schema: INVENTORY_SCHEMA,
         system: scan_system(sysfs_root),
         devices,
+        driver_sources: driver_source_manifest(
+            modules_alias,
+            modules_firmware,
+            modules_dep,
+            modules_builtin,
+            firmware_roots,
+        )?,
         capabilities,
     })
+}
+
+/// Record the exact metadata tables used for lookup.  Kernel and firmware
+/// repositories are intentionally not fetched here: a live medium may be
+/// offline, and only the signed Arach authorities can authorize an install.
+fn driver_source_manifest(
+    modules_alias: &[PathBuf],
+    modules_firmware: &[PathBuf],
+    modules_dep: &[PathBuf],
+    modules_builtin: &[PathBuf],
+    firmware_roots: &[PathBuf],
+) -> io::Result<DriverSourceManifest> {
+    let mut evidence = Vec::new();
+    for (kind, paths) in [
+        (DriverSourceKind::KernelMetadata, modules_alias),
+        (DriverSourceKind::FirmwareMetadata, modules_firmware),
+        (DriverSourceKind::KernelMetadata, modules_dep),
+        (DriverSourceKind::KernelMetadata, modules_builtin),
+    ] {
+        for path in paths {
+            let bytes = read_modules_metadata(path, MAX_MODULES_ALIAS_BYTES, "driver metadata")?;
+            let mut hasher = Sha256::new();
+            hasher.update(bytes.as_bytes());
+            evidence.push(DriverSourceEvidence {
+                kind: kind.clone(),
+                path: path.clone(),
+                sha256: Some(format!("{:x}", hasher.finalize())),
+            });
+        }
+    }
+    let mut roots = firmware_roots.to_vec();
+    roots.sort();
+    roots.dedup();
+    for path in roots {
+        let metadata = fs::symlink_metadata(&path)?;
+        if !metadata.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("firmware root is not a directory: {}", path.display()),
+            ));
+        }
+        evidence.push(DriverSourceEvidence {
+            kind: DriverSourceKind::FirmwareTree,
+            path,
+            sha256: None,
+        });
+    }
+    evidence.sort_by(|left, right| {
+        left.kind
+            .cmp(&right.kind)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    evidence.dedup();
+    Ok(DriverSourceManifest::new(evidence))
 }
 
 /// Locate the alias table belonging to the running Linux kernel.  This is
@@ -1958,6 +2021,46 @@ mod tests {
         );
         let firmware = collect_modules_files([root.clone()], "modules.firmware");
         assert_eq!(firmware, vec![second.join("modules.firmware")]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn source_manifest_hashes_metadata_and_lists_authorities() {
+        let root = scratch();
+        fs::create_dir_all(&root).unwrap();
+        let alias = root.join("modules.alias");
+        fs::write(&alias, "alias pci:* fixture\n").unwrap();
+        let firmware = root.join("firmware");
+        fs::create_dir_all(&firmware).unwrap();
+
+        let inventory = scan_inventory_with_driver_sources(
+            &root,
+            std::slice::from_ref(&alias),
+            &[],
+            &[],
+            &[],
+            std::slice::from_ref(&firmware),
+        )
+        .unwrap();
+        let sources = &inventory.driver_sources;
+        assert_eq!(sources.schema, crate::sources::DRIVER_SOURCE_SCHEMA);
+        assert!(
+            sources
+                .authorities
+                .iter()
+                .any(|authority| authority.id == "arach-hardware" && authority.install_authority)
+        );
+        let metadata = sources
+            .evidence
+            .iter()
+            .find(|entry| entry.path == alias)
+            .unwrap();
+        let expected = format!("{:x}", Sha256::digest(b"alias pci:* fixture\n"));
+        assert_eq!(metadata.sha256.as_deref(), Some(expected.as_str()));
+        assert!(sources
+            .evidence
+            .iter()
+            .any(|entry| entry.kind == DriverSourceKind::FirmwareTree && entry.path == firmware));
         fs::remove_dir_all(root).unwrap();
     }
 

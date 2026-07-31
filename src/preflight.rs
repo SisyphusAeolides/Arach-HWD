@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Version of the installer-facing capability report.
-pub const PREFLIGHT_SCHEMA: u32 = 4;
+pub const PREFLIGHT_SCHEMA: u32 = 5;
 
 /// A device without a bound kernel driver.  The modalias and identity fields
 /// are the exact lookup key for Corinth's signed `arach-hardware` index.
@@ -51,6 +51,8 @@ pub struct UnresolvedDevice {
 pub struct PreflightReport {
     pub schema: u32,
     pub inventory_schema: u32,
+    #[serde(default)]
+    pub driver_sources: crate::sources::DriverSourceManifest,
     pub ready: bool,
     pub requirements: Vec<CapabilityRequirement>,
     pub unresolved: Vec<UnresolvedDevice>,
@@ -116,6 +118,7 @@ pub fn preflight_inventory(inventory: &Inventory) -> PreflightReport {
     PreflightReport {
         schema: PREFLIGHT_SCHEMA,
         inventory_schema: inventory.schema,
+        driver_sources: inventory.driver_sources.clone(),
         ready: unresolved.is_empty(),
         requirements: inventory.capabilities.clone(),
         unresolved,
@@ -179,9 +182,10 @@ mod tests {
             ]),
         };
         let inventory = Inventory {
-            schema: 3,
+            schema: crate::scan::INVENTORY_SCHEMA,
             system: SystemFacts::default(),
             devices: vec![device],
+            driver_sources: crate::sources::DriverSourceManifest::default(),
             capabilities: vec![CapabilityRequirement {
                 capability: HardwareCapability::Network,
                 device_keys: vec!["class:net:wlan0".into()],

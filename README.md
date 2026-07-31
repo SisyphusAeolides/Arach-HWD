@@ -54,7 +54,7 @@ The current command surface is deliberately read-only:
     arach-hwd preflight [--sysfs /sys] [--modules-alias FILE]... [--modules-firmware FILE]... [--modules-dep FILE]... [--modules-builtin FILE]... [--firmware-root DIR]... --allow-unresolved
     arach-hwd plan --profiles DIR --keyring FILE --catalog-lock FILE --driver-abi 1.0 [--sysfs /sys] [--modules-alias FILE]... [--modules-firmware FILE]... [--modules-dep FILE]... [--modules-builtin FILE]... [--firmware-root DIR]... [--output FILE] [--require-target-profiles]
 
-`scan` emits inventory schema 3 and `preflight` emits report schema 4. If the metadata options are omitted, the CLI
+`scan` emits inventory schema 4 and `preflight` emits report schema 5. If the metadata options are omitted, the CLI
 discovers every regular, non-symlink `modules.alias`, `modules.dep`,
 `modules.builtin`, and `modules.firmware`
 table under `/lib/modules`, `/usr/lib/modules`, `/run/arach/target-modules`,
@@ -92,6 +92,15 @@ double-counted as package boundaries. With `--output`, it writes the exact
 plan document for the installer to hand to Corinth; without it, the document
 is printed for inspection. The plan output is the boundary for Corinth's
 durable transaction service.
+
+Every inventory and preflight report also contains `driver_sources`. It lists
+the hashed `modules.alias`, `modules.dep`, `modules.builtin`, and
+`modules.firmware` files that were consulted, the firmware discovery roots,
+and the immutable authorities used for the next lookup. The Arach-HWD and
+Arach-Packages repositories are the only install authorities; Linux kernel and
+linux-firmware trees are broad, advisory reference sources. This makes a
+Calamares run auditable and reproducible without allowing a random upstream
+module or firmware filename to become an install plan.
 
 ## Validation
 

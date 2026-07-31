@@ -111,6 +111,10 @@ pub struct Inventory {
     pub schema: u32,
     pub system: SystemFacts,
     pub devices: Vec<HardwareDevice>,
+    /// Exact metadata inputs and the signed authorities available to the
+    /// installer.  This is discovery provenance, not package authorization.
+    #[serde(default)]
+    pub driver_sources: crate::sources::DriverSourceManifest,
     /// Capability groups are emitted in the fixed `HardwareCapability::ALL`
     /// order. Empty groups mean the function is not present on this machine;
     /// they are retained so consumers can use one stable schema everywhere.
