@@ -25,5 +25,9 @@ path = "src/lib.rs"
 name = "arach-hwd"
 path = "src/main.rs"
 
+[[bin]]
+name = "arach-hwd-catalog-sync"
+path = "src/bin/arach-hwd-catalog-sync.rs"
+
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
