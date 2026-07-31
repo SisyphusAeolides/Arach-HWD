@@ -1,7 +1,7 @@
 # Arach HWD
 
 Arach HWD is the automatic hardware detection and provisioning planner for
-Arach OS. It scans PCI, USB, I2C, ACPI, DMI, and Linux class devices without
+Arach OS. It scans PCI, USB, I2C, ACPI, platform, SPI, serio, HID, DMI, and Linux class devices without
 modifying the machine. The inventory groups network, wireless, audio,
 graphics, storage, input, Bluetooth, and firmware capabilities and preserves
 the exact bus/modalias identity Corinth needs to find a signed driver or
@@ -49,7 +49,7 @@ profile and an Arach Hardware repository package intent are still required
 before Corinth may activate a driver or firmware package. `plan` refuses to
 emit a partial package set when an unresolved device has no matching signed
 profile. Calamares additionally passes `--require-target-profiles`: this
-checks every physical PCI, USB, I2C, and ACPI function that provides a
+checks every physical PCI, USB, I2C, ACPI, platform, SPI, serio, and HID function that provides a
 hardware capability, even when the temporary live Linux kernel already has a
 driver bound. A live-kernel driver is not evidence that the newly installed
 Arach kernel contains the same driver. Linux class entries such as `wlan0`,

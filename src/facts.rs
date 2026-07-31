@@ -19,6 +19,10 @@ pub enum Bus {
     Usb,
     I2c,
     Acpi,
+    Platform,
+    Spi,
+    Serio,
+    Hid,
     Sysfs,
 }
 
@@ -29,6 +33,10 @@ impl Bus {
             Self::Usb => "usb",
             Self::I2c => "i2c",
             Self::Acpi => "acpi",
+            Self::Platform => "platform",
+            Self::Spi => "spi",
+            Self::Serio => "serio",
+            Self::Hid => "hid",
             Self::Sysfs => "sysfs",
         }
     }

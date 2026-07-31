@@ -14,6 +14,10 @@ pub fn scan_inventory(sysfs_root: &Path) -> io::Result<Inventory> {
     scan_usb(sysfs_root, &mut devices)?;
     scan_i2c(sysfs_root, &mut devices)?;
     scan_acpi(sysfs_root, &mut devices)?;
+    scan_simple_bus(sysfs_root, "platform", Bus::Platform, &mut devices)?;
+    scan_simple_bus(sysfs_root, "spi", Bus::Spi, &mut devices)?;
+    scan_simple_bus(sysfs_root, "serio", Bus::Serio, &mut devices)?;
+    scan_simple_bus(sysfs_root, "hid", Bus::Hid, &mut devices)?;
     scan_class_devices(sysfs_root, &mut devices)?;
     devices.sort_by(|left, right| left.key.cmp(&right.key));
     devices.dedup_by(|left, right| left.key == right.key);
@@ -31,7 +35,8 @@ pub fn scan_inventory(sysfs_root: &Path) -> io::Result<Inventory> {
 /// their parent device (for example `class:net:wlan0`); requiring a second
 /// profile for every child would both duplicate packages and make coverage
 /// depend on the live kernel's class layout.  Bus identities remain the
-/// stable package boundary and include PCI, USB, I²C, and ACPI functions.
+/// stable package boundary and include PCI, USB, I²C, ACPI, platform, SPI,
+/// serio, and HID functions.
 pub fn target_profile_required(device: &HardwareDevice) -> bool {
     device.bus != Bus::Sysfs && !device_capabilities(device).is_empty()
 }
@@ -177,6 +182,76 @@ fn scan_acpi(root: &Path, output: &mut Vec<HardwareDevice>) -> io::Result<()> {
             modalias,
             vendor: None,
             product: None,
+            subsystem_vendor: None,
+            subsystem_product: None,
+            class: None,
+            revision: None,
+            driver: driver_name(&path),
+            properties,
+        });
+    }
+    Ok(())
+}
+
+/// Scan buses whose kernel identity is carried by a name/modalias rather than
+/// a universal vendor/product tuple.  Platform, SPI, serio, and HID devices
+/// are still physical package boundaries: a live kernel binding is not proof
+/// that the target Arach kernel contains the same driver.
+fn scan_simple_bus(
+    root: &Path,
+    bus_name: &str,
+    bus: Bus,
+    output: &mut Vec<HardwareDevice>,
+) -> io::Result<()> {
+    for path in entries(root.join("bus").join(bus_name).join("devices"))? {
+        let Some(id) = file_name(&path) else {
+            continue;
+        };
+        let modalias = read_first(&[
+            path.join("modalias"),
+            path.join("device/modalias"),
+            path.join("uevent"),
+        ]);
+        let name = read_first(&[
+            path.join("name"),
+            path.join("device/name"),
+            path.join("product"),
+            path.join("device/product"),
+        ]);
+        if name.is_empty() && modalias.is_empty() {
+            continue;
+        }
+        let mut properties = BTreeMap::new();
+        insert_nonempty(
+            &mut properties,
+            "firmware",
+            read_first(&[path.join("firmware"), path.join("device/firmware")]),
+        );
+        insert_nonempty(
+            &mut properties,
+            "uevent",
+            read_first(&[path.join("uevent"), path.join("device/uevent")]),
+        );
+        let vendor = read_first_hex(&[
+            path.join("id/vendor"),
+            path.join("device/id/vendor"),
+            path.join("vendor"),
+            path.join("device/vendor"),
+        ]);
+        let product = read_first_hex(&[
+            path.join("id/product"),
+            path.join("device/id/product"),
+            path.join("product_id"),
+            path.join("device/product_id"),
+        ]);
+        output.push(HardwareDevice {
+            key: format!("{bus_name}:{id}"),
+            bus,
+            sysfs_path: relative(root, &path),
+            name,
+            modalias,
+            vendor,
+            product,
             subsystem_vendor: None,
             subsystem_product: None,
             class: None,
@@ -571,6 +646,42 @@ fn device_capabilities(device: &HardwareDevice) -> BTreeSet<HardwareCapability> 
                 result.insert(HardwareCapability::Input);
             }
         }
+        Bus::Platform | Bus::Spi => {
+            let text = format!("{} {}", device.name, device.modalias).to_ascii_lowercase();
+            if ["audio", "codec", "hda", "sof", "sound"]
+                .iter()
+                .any(|needle| text.contains(needle))
+            {
+                result.insert(HardwareCapability::Audio);
+            }
+            if [
+                "elan",
+                "synaptics",
+                "touchpad",
+                "touchscreen",
+                "keyboard",
+                "mouse",
+                "pointing",
+                "i8042",
+                "wacom",
+            ]
+            .iter()
+            .any(|needle| text.contains(needle))
+            {
+                result.insert(HardwareCapability::Input);
+            }
+            if text.contains("bluetooth") {
+                result.insert(HardwareCapability::Bluetooth);
+                result.insert(HardwareCapability::Wireless);
+            }
+            if text.contains("wireless") || text.contains("wifi") || text.contains("wlan") {
+                result.insert(HardwareCapability::Network);
+                result.insert(HardwareCapability::Wireless);
+            }
+        }
+        Bus::Serio | Bus::Hid => {
+            result.insert(HardwareCapability::Input);
+        }
         Bus::Sysfs => {}
     }
     // USB Wi-Fi adapters often have bDeviceClass=0 and PCI devices can expose
@@ -822,5 +933,66 @@ mod tests {
         };
         assert!(target_profile_required(&bus_device));
         assert!(!target_profile_required(&class_device));
+    }
+
+    #[test]
+    fn physical_non_pci_buses_are_input_and_audio_boundaries() {
+        let root = scratch();
+        let platform = root.join("bus/platform/devices/i8042");
+        let spi = root.join("bus/spi/devices/spi-ELAN0001");
+        let serio = root.join("bus/serio/devices/serio0");
+        let hid = root.join("bus/hid/devices/0003:04F3:1234.0001");
+        for path in [&platform, &spi, &serio, &hid] {
+            fs::create_dir_all(path).unwrap();
+        }
+        fs::write(platform.join("name"), "i8042\n").unwrap();
+        fs::write(platform.join("modalias"), "platform:i8042\n").unwrap();
+        fs::write(spi.join("name"), "ELAN touchscreen\n").unwrap();
+        fs::write(spi.join("modalias"), "spi:elan\n").unwrap();
+        fs::write(serio.join("name"), "i8042 Kbd Port\n").unwrap();
+        fs::write(serio.join("modalias"), "serio:ty05pr00id00ex00\n").unwrap();
+        fs::write(hid.join("name"), "HID device\n").unwrap();
+        fs::write(hid.join("modalias"), "hid:b0003g\n").unwrap();
+
+        let inventory = scan_inventory(&root).unwrap();
+        assert!(
+            inventory.devices.iter().any(|device| {
+                device.key == "platform:i8042" && target_profile_required(device)
+            })
+        );
+        assert!(
+            inventory.devices.iter().any(|device| {
+                device.key == "spi:spi-ELAN0001" && target_profile_required(device)
+            })
+        );
+        assert!(
+            inventory
+                .devices
+                .iter()
+                .any(|device| { device.key == "serio:serio0" && device.bus == Bus::Serio })
+        );
+        assert!(
+            inventory.devices.iter().any(|device| {
+                device.key == "hid:0003:04F3:1234.0001" && device.bus == Bus::Hid
+            })
+        );
+        let input = inventory
+            .capabilities
+            .iter()
+            .find(|requirement| requirement.capability == HardwareCapability::Input)
+            .unwrap();
+        assert!(input.device_keys.contains(&"serio:serio0".into()));
+        assert!(
+            input
+                .device_keys
+                .contains(&"hid:0003:04F3:1234.0001".into())
+        );
+        let audio = inventory
+            .capabilities
+            .iter()
+            .find(|requirement| requirement.capability == HardwareCapability::Audio)
+            .unwrap();
+        assert!(audio.device_keys.is_empty());
+        fs::remove_dir_all(root).unwrap();
     }
 }
