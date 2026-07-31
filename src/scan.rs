@@ -6,10 +6,10 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-pub const INVENTORY_SCHEMA: u32 = 2;
+pub const INVENTORY_SCHEMA: u32 = 3;
 
 pub fn scan_inventory(sysfs_root: &Path) -> io::Result<Inventory> {
-    scan_inventory_with_modules_alias(sysfs_root, None)
+    scan_inventory_with_modules_metadata(sysfs_root, &[], &[])
 }
 
 /// Scan the hardware tree and, when supplied, annotate every modalias with
@@ -19,6 +19,22 @@ pub fn scan_inventory(sysfs_root: &Path) -> io::Result<Inventory> {
 pub fn scan_inventory_with_modules_alias(
     sysfs_root: &Path,
     modules_alias: Option<&Path>,
+) -> io::Result<Inventory> {
+    let aliases = modules_alias
+        .map(|path| vec![path.to_path_buf()])
+        .unwrap_or_default();
+    scan_inventory_with_modules_metadata(sysfs_root, &aliases, &[])
+}
+
+/// Scan the hardware tree and annotate modaliases with the union of one or
+/// more Linux module metadata sets.  Passing both the live medium's and the
+/// target kernel's tables lets Calamares discover a driver that is available
+/// only in the target image.  The metadata remains advisory evidence; a
+/// signed Arach profile is still required before Corinth may install it.
+pub fn scan_inventory_with_modules_metadata(
+    sysfs_root: &Path,
+    modules_alias: &[PathBuf],
+    modules_firmware: &[PathBuf],
 ) -> io::Result<Inventory> {
     let mut devices = Vec::new();
     scan_pci(sysfs_root, &mut devices)?;
@@ -32,8 +48,11 @@ pub fn scan_inventory_with_modules_alias(
     scan_class_devices(sysfs_root, &mut devices)?;
     devices.sort_by(|left, right| left.key.cmp(&right.key));
     devices.dedup_by(|left, right| left.key == right.key);
-    if let Some(path) = modules_alias {
-        annotate_linux_driver_candidates(&mut devices, path)?;
+    if !modules_alias.is_empty() {
+        annotate_linux_driver_candidates(&mut devices, modules_alias)?;
+    }
+    if !modules_firmware.is_empty() {
+        annotate_linux_firmware_candidates(&mut devices, modules_firmware)?;
     }
     let capabilities = capability_requirements(&devices);
     Ok(Inventory {
@@ -48,14 +67,25 @@ pub fn scan_inventory_with_modules_alias(
 /// intentionally best-effort; a minimal live image may not ship Linux module
 /// metadata, and the signed Arach catalog remains the authoritative source.
 pub fn default_modules_alias() -> Option<PathBuf> {
+    default_modules_file("modules.alias")
+}
+
+/// Locate the firmware requirement table belonging to the running Linux
+/// kernel.  It is optional because many distributions omit it from minimal
+/// live media; explicit `--modules-firmware` paths remain available.
+pub fn default_modules_firmware() -> Option<PathBuf> {
+    default_modules_file("modules.firmware")
+}
+
+fn default_modules_file(file: &str) -> Option<PathBuf> {
     let release = fs::read_to_string("/proc/sys/kernel/osrelease").ok()?;
     let release = release.trim();
     if release.is_empty() {
         return None;
     }
     [
-        PathBuf::from(format!("/lib/modules/{release}/modules.alias")),
-        PathBuf::from(format!("/usr/lib/modules/{release}/modules.alias")),
+        PathBuf::from(format!("/lib/modules/{release}/{file}")),
+        PathBuf::from(format!("/usr/lib/modules/{release}/{file}")),
     ]
     .into_iter()
     .find(|path| {
@@ -552,7 +582,9 @@ fn read_first_hex(paths: &[PathBuf]) -> Option<u32> {
 }
 
 const MAX_MODULES_ALIAS_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_MODULES_FIRMWARE_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_DRIVER_CANDIDATES: usize = 32;
+const MAX_FIRMWARE_CANDIDATES: usize = 64;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct LinuxAlias {
@@ -563,30 +595,19 @@ struct LinuxAlias {
 
 fn annotate_linux_driver_candidates(
     devices: &mut [HardwareDevice],
-    modules_alias: &Path,
+    modules_alias: &[PathBuf],
 ) -> io::Result<()> {
-    let metadata = fs::symlink_metadata(modules_alias)?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "modules alias table is not a regular file: {}",
-                modules_alias.display()
-            ),
-        ));
+    let mut aliases = Vec::new();
+    for path in modules_alias {
+        let text = read_modules_metadata(path, MAX_MODULES_ALIAS_BYTES, "modules alias")?;
+        aliases.extend(parse_modules_alias(&text));
     }
-    if metadata.len() > MAX_MODULES_ALIAS_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "modules alias table exceeds {} bytes: {}",
-                MAX_MODULES_ALIAS_BYTES,
-                modules_alias.display()
-            ),
-        ));
-    }
-    let text = fs::read_to_string(modules_alias)?;
-    let aliases = parse_modules_alias(&text);
+    aliases.sort_by(|left, right| {
+        left.pattern
+            .cmp(&right.pattern)
+            .then_with(|| left.driver.cmp(&right.driver))
+    });
+    aliases.dedup_by(|left, right| left.pattern == right.pattern && left.driver == right.driver);
     for device in devices {
         if device.modalias.is_empty() {
             continue;
@@ -608,6 +629,77 @@ fn annotate_linux_driver_candidates(
         }
     }
     Ok(())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ModuleFirmware {
+    module: String,
+    firmware: Vec<String>,
+}
+
+fn annotate_linux_firmware_candidates(
+    devices: &mut [HardwareDevice],
+    modules_firmware: &[PathBuf],
+) -> io::Result<()> {
+    let mut records = Vec::new();
+    for path in modules_firmware {
+        let text = read_modules_metadata(path, MAX_MODULES_FIRMWARE_BYTES, "modules firmware")?;
+        records.extend(parse_modules_firmware(&text));
+    }
+    records.sort_by(|left, right| left.module.cmp(&right.module));
+    records.dedup_by(|left, right| left.module == right.module);
+
+    for device in devices {
+        let mut drivers = BTreeSet::new();
+        if let Some(value) = device.properties.get("linux_driver_candidates") {
+            drivers.extend(value.split(',').map(canonical_module_name));
+        }
+        if let Some(driver) = &device.driver {
+            drivers.insert(canonical_module_name(driver));
+        }
+
+        let mut firmware = BTreeSet::new();
+        if let Some(value) = device.properties.get("firmware") {
+            firmware.extend(
+                value
+                    .split([',', ' ', '\t'])
+                    .filter(|name| valid_firmware_candidate(name))
+                    .map(ToOwned::to_owned),
+            );
+        }
+        for record in &records {
+            if drivers.contains(&record.module) {
+                firmware.extend(record.firmware.iter().cloned());
+            }
+        }
+        if firmware.len() > MAX_FIRMWARE_CANDIDATES {
+            firmware = firmware.into_iter().take(MAX_FIRMWARE_CANDIDATES).collect();
+        }
+        if !firmware.is_empty() {
+            device.properties.insert(
+                "linux_firmware_candidates".into(),
+                firmware.into_iter().collect::<Vec<_>>().join(","),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn read_modules_metadata(path: &Path, limit: u64, label: &str) -> io::Result<String> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{label} table is not a regular file: {}", path.display()),
+        ));
+    }
+    if metadata.len() > limit {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{label} table exceeds {limit} bytes: {}", path.display()),
+        ));
+    }
+    fs::read_to_string(path)
 }
 
 fn parse_modules_alias(text: &str) -> Vec<LinuxAlias> {
@@ -645,6 +737,74 @@ fn parse_modules_alias(text: &str) -> Vec<LinuxAlias> {
             .then_with(|| left.driver.cmp(&right.driver))
     });
     aliases
+}
+
+fn parse_modules_firmware(text: &str) -> Vec<ModuleFirmware> {
+    let mut records = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((module, firmware_text)) = line.split_once(':') else {
+            continue;
+        };
+        let module = canonical_module_name(module);
+        if module.is_empty() {
+            continue;
+        }
+        let mut firmware = firmware_text
+            .split_ascii_whitespace()
+            .filter(|name| valid_firmware_candidate(name))
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        firmware.sort();
+        firmware.dedup();
+        if firmware.is_empty() {
+            continue;
+        }
+        if let Some(existing) = records
+            .iter_mut()
+            .find(|record: &&mut ModuleFirmware| record.module == module)
+        {
+            existing.firmware.extend(firmware);
+            existing.firmware.sort();
+            existing.firmware.dedup();
+        } else {
+            records.push(ModuleFirmware { module, firmware });
+        }
+    }
+    records
+}
+
+fn canonical_module_name(value: &str) -> String {
+    let mut name = Path::new(value)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(value)
+        .to_owned();
+    for suffix in [".xz", ".zst", ".gz", ".bz2", ".lz4", ".lz"] {
+        if let Some(stripped) = name.strip_suffix(suffix) {
+            name = stripped.to_owned();
+            break;
+        }
+    }
+    if let Some(stripped) = name.strip_suffix(".ko") {
+        name = stripped.to_owned();
+    }
+    name.replace('-', "_")
+}
+
+fn valid_firmware_candidate(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && !Path::new(value).is_absolute()
+        && !Path::new(value)
+            .components()
+            .any(|component| component == std::path::Component::ParentDir)
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/' | b'+' | b'@')
+        })
 }
 
 fn valid_driver_candidate(value: &str) -> bool {
@@ -1260,6 +1420,54 @@ mod tests {
         assert_eq!(
             device.properties.get("linux_driver_candidates"),
             Some(&String::from("iwlwifi,zzz-driver"))
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn module_metadata_merges_target_drivers_and_firmware() {
+        let root = scratch();
+        let pci = root.join("bus/pci/devices/0000:00:14.3");
+        fs::create_dir_all(&pci).unwrap();
+        fs::write(pci.join("vendor"), "8086\n").unwrap();
+        fs::write(pci.join("device"), "2723\n").unwrap();
+        fs::write(
+            pci.join("modalias"),
+            "pci:v00008086d00002723sv00001028sd00000001bc02sc80i00\n",
+        )
+        .unwrap();
+        let live_aliases = root.join("live.modules.alias");
+        let target_aliases = root.join("target.modules.alias");
+        fs::write(&live_aliases, "alias pci:v00008086d00002723* iwlwifi\n").unwrap();
+        fs::write(&target_aliases, "alias pci:v00008086d00002723* ath12k\n").unwrap();
+        let firmware = root.join("modules.firmware");
+        fs::write(
+            &firmware,
+            "kernel/drivers/net/wireless/iwlwifi.ko.xz: iwlwifi-a.bin iwlwifi/iwlwifi-b.bin\n\
+             kernel/drivers/net/wireless/ath12k.ko: ath12k/test.bin ../escape.bin\n",
+        )
+        .unwrap();
+
+        let inventory = scan_inventory_with_modules_metadata(
+            &root,
+            &[live_aliases, target_aliases],
+            &[firmware],
+        )
+        .unwrap();
+        let device = inventory
+            .devices
+            .iter()
+            .find(|device| device.key == "pci:0000:00:14.3")
+            .unwrap();
+        assert_eq!(
+            device.properties.get("linux_driver_candidates"),
+            Some(&String::from("ath12k,iwlwifi"))
+        );
+        assert_eq!(
+            device.properties.get("linux_firmware_candidates"),
+            Some(&String::from(
+                "ath12k/test.bin,iwlwifi-a.bin,iwlwifi/iwlwifi-b.bin"
+            ))
         );
         fs::remove_dir_all(root).unwrap();
     }

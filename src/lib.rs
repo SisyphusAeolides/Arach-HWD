@@ -16,4 +16,7 @@ pub use health::{HealthEvidence, RecoveryDisposition, assess_recovery};
 pub use plan::{ProvisionPlan, build_plan};
 pub use preflight::{PREFLIGHT_SCHEMA, PreflightReport, UnresolvedDevice, preflight_inventory};
 pub use profile::{HardwareProfile, ResolveError, VerifiedProfile, resolve};
-pub use scan::scan_inventory;
+pub use scan::{
+    default_modules_alias, default_modules_firmware, scan_inventory,
+    scan_inventory_with_modules_alias, scan_inventory_with_modules_metadata,
+};

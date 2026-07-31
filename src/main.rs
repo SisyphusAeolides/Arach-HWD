@@ -3,8 +3,8 @@ use arach_hwd::plan::{PLAN_SCHEMA, PlanSet};
 use arach_hwd::preflight::{PREFLIGHT_SCHEMA, preflight_inventory};
 use arach_hwd::profile::resolve;
 use arach_hwd::scan::{
-    INVENTORY_SCHEMA, default_modules_alias, scan_inventory_with_modules_alias,
-    target_profile_required,
+    INVENTORY_SCHEMA, default_modules_alias, default_modules_firmware,
+    scan_inventory_with_modules_metadata, target_profile_required,
 };
 use arach_hwd::signature::{Keyring, load_profiles};
 use std::collections::BTreeSet;
@@ -37,17 +37,26 @@ fn run() -> Result<(), String> {
 
 fn preflight_command(arguments: &[String]) -> Result<(), String> {
     let sysfs = option(arguments, "--sysfs")?.unwrap_or_else(|| "/sys".into());
-    let modules_alias = modules_alias(arguments)?;
+    let modules_alias = modules_aliases(arguments)?;
+    let modules_firmware = modules_firmware(arguments)?;
     let output_path = option(arguments, "--output")?;
     let allow_unresolved = has_flag(arguments, "--allow-unresolved")?;
     reject_unknown_with_flags(
         arguments,
-        &["--sysfs", "--modules-alias", "--output"],
+        &[
+            "--sysfs",
+            "--modules-alias",
+            "--modules-firmware",
+            "--output",
+        ],
         &["--allow-unresolved"],
     )?;
-    let inventory =
-        scan_inventory_with_modules_alias(&PathBuf::from(sysfs), modules_alias.as_deref())
-            .map_err(|error| error.to_string())?;
+    let inventory = scan_inventory_with_modules_metadata(
+        &PathBuf::from(sysfs),
+        &modules_alias,
+        &modules_firmware,
+    )
+    .map_err(|error| error.to_string())?;
     if inventory.schema != INVENTORY_SCHEMA {
         return Err(format!(
             "scanner emitted inventory schema {}, expected {}",
@@ -78,11 +87,18 @@ fn preflight_command(arguments: &[String]) -> Result<(), String> {
 
 fn scan_command(arguments: &[String]) -> Result<(), String> {
     let sysfs = option(arguments, "--sysfs")?.unwrap_or_else(|| "/sys".into());
-    let modules_alias = modules_alias(arguments)?;
-    reject_unknown(arguments, &["--sysfs", "--modules-alias"])?;
-    let inventory =
-        scan_inventory_with_modules_alias(&PathBuf::from(sysfs), modules_alias.as_deref())
-            .map_err(|error| error.to_string())?;
+    let modules_alias = modules_aliases(arguments)?;
+    let modules_firmware = modules_firmware(arguments)?;
+    reject_unknown(
+        arguments,
+        &["--sysfs", "--modules-alias", "--modules-firmware"],
+    )?;
+    let inventory = scan_inventory_with_modules_metadata(
+        &PathBuf::from(sysfs),
+        &modules_alias,
+        &modules_firmware,
+    )
+    .map_err(|error| error.to_string())?;
     let output = toml::to_string_pretty(&inventory).map_err(|error| error.to_string())?;
     print!("{output}");
     Ok(())
@@ -90,7 +106,8 @@ fn scan_command(arguments: &[String]) -> Result<(), String> {
 
 fn plan_command(arguments: &[String]) -> Result<(), String> {
     let sysfs = option(arguments, "--sysfs")?.unwrap_or_else(|| "/sys".into());
-    let modules_alias = modules_alias(arguments)?;
+    let modules_alias = modules_aliases(arguments)?;
+    let modules_firmware = modules_firmware(arguments)?;
     let profile_dir = option(arguments, "--profiles")?
         .ok_or_else(|| "plan requires --profiles DIR".to_owned())?;
     let keyring_path =
@@ -106,6 +123,7 @@ fn plan_command(arguments: &[String]) -> Result<(), String> {
         &[
             "--sysfs",
             "--modules-alias",
+            "--modules-firmware",
             "--profiles",
             "--keyring",
             "--catalog-lock",
@@ -114,9 +132,12 @@ fn plan_command(arguments: &[String]) -> Result<(), String> {
         ],
         &["--require-target-profiles"],
     )?;
-    let inventory =
-        scan_inventory_with_modules_alias(&PathBuf::from(sysfs), modules_alias.as_deref())
-            .map_err(|error| error.to_string())?;
+    let inventory = scan_inventory_with_modules_metadata(
+        &PathBuf::from(sysfs),
+        &modules_alias,
+        &modules_firmware,
+    )
+    .map_err(|error| error.to_string())?;
     verify_catalog(
         &PathBuf::from(catalog_lock),
         &PathBuf::from(profile_dir.clone()),
@@ -210,10 +231,45 @@ fn option(arguments: &[String], name: &str) -> Result<Option<String>, String> {
     Ok(result)
 }
 
-fn modules_alias(arguments: &[String]) -> Result<Option<PathBuf>, String> {
-    Ok(option(arguments, "--modules-alias")?
+fn modules_aliases(arguments: &[String]) -> Result<Vec<PathBuf>, String> {
+    let paths = options(arguments, "--modules-alias")?
+        .into_iter()
         .map(PathBuf::from)
-        .or_else(default_modules_alias))
+        .collect::<Vec<_>>();
+    if paths.is_empty() {
+        Ok(default_modules_alias().into_iter().collect())
+    } else {
+        Ok(paths)
+    }
+}
+
+fn modules_firmware(arguments: &[String]) -> Result<Vec<PathBuf>, String> {
+    let paths = options(arguments, "--modules-firmware")?
+        .into_iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    if paths.is_empty() {
+        Ok(default_modules_firmware().into_iter().collect())
+    } else {
+        Ok(paths)
+    }
+}
+
+fn options(arguments: &[String], name: &str) -> Result<Vec<String>, String> {
+    let mut values = Vec::new();
+    let mut index = 0;
+    while index < arguments.len() {
+        if arguments[index] == name {
+            let value = arguments
+                .get(index + 1)
+                .ok_or_else(|| format!("{name} requires a value"))?;
+            values.push(value.clone());
+            index += 2;
+        } else {
+            index += 1;
+        }
+    }
+    Ok(values)
 }
 
 fn reject_unknown(arguments: &[String], known: &[&str]) -> Result<(), String> {
@@ -268,5 +324,5 @@ fn has_flag(arguments: &[String], name: &str) -> Result<bool, String> {
 }
 
 fn usage() -> String {
-    "usage: arach-hwd scan [--sysfs ROOT] [--modules-alias FILE] | arach-hwd preflight [--sysfs ROOT] [--modules-alias FILE] [--output FILE] [--allow-unresolved] | arach-hwd plan --profiles DIR --keyring FILE --catalog-lock FILE --driver-abi MAJOR.MINOR [--sysfs ROOT] [--modules-alias FILE] [--output FILE] [--require-target-profiles]".into()
+    "usage: arach-hwd scan [--sysfs ROOT] [--modules-alias FILE]... [--modules-firmware FILE]... | arach-hwd preflight [--sysfs ROOT] [--modules-alias FILE]... [--modules-firmware FILE]... [--output FILE] [--allow-unresolved] | arach-hwd plan --profiles DIR --keyring FILE --catalog-lock FILE --driver-abi MAJOR.MINOR [--sysfs ROOT] [--modules-alias FILE]... [--modules-firmware FILE]... [--output FILE] [--require-target-profiles]".into()
 }

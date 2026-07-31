@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Version of the installer-facing capability report.
-pub const PREFLIGHT_SCHEMA: u32 = 2;
+pub const PREFLIGHT_SCHEMA: u32 = 3;
 
 /// A device without a bound kernel driver.  The modalias and identity fields
 /// are the exact lookup key for Corinth's signed `arach-hardware` index.
@@ -24,6 +24,11 @@ pub struct UnresolvedDevice {
     /// an install and are not substituted for a signed Arach profile.
     #[serde(default)]
     pub candidate_drivers: Vec<String>,
+    /// Firmware names advertised by the matching Linux modules.firmware table
+    /// (plus any sysfs FIRMWARE request).  These are lookup evidence only;
+    /// Corinth still requires an exact signed firmware intent.
+    #[serde(default)]
+    pub candidate_firmware: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -66,6 +71,17 @@ pub fn preflight_inventory(inventory: &Inventory) -> PreflightReport {
                         value
                             .split(',')
                             .filter(|driver| !driver.is_empty())
+                            .map(ToOwned::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                candidate_firmware: device
+                    .properties
+                    .get("linux_firmware_candidates")
+                    .map(|value| {
+                        value
+                            .split(',')
+                            .filter(|firmware| !firmware.is_empty())
                             .map(ToOwned::to_owned)
                             .collect()
                     })
@@ -115,10 +131,14 @@ mod tests {
                     String::from("linux_driver_candidates"),
                     String::from("iwlwifi,ath12k"),
                 ),
+                (
+                    String::from("linux_firmware_candidates"),
+                    String::from("iwlwifi-a.bin,ath12k/test.bin"),
+                ),
             ]),
         };
         let inventory = Inventory {
-            schema: 2,
+            schema: 3,
             system: SystemFacts::default(),
             devices: vec![device],
             capabilities: vec![CapabilityRequirement {
@@ -135,6 +155,10 @@ mod tests {
         assert_eq!(
             report.unresolved[0].candidate_drivers,
             vec!["iwlwifi".to_owned(), "ath12k".to_owned()]
+        );
+        assert_eq!(
+            report.unresolved[0].candidate_firmware,
+            vec!["iwlwifi-a.bin".to_owned(), "ath12k/test.bin".to_owned()]
         );
     }
 }
