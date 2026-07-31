@@ -7,6 +7,7 @@ rust-version = "1.85"
 repository = "https://github.com/SisyphusAeolides/Arach-HWD"
 description = "Signed hardware profile resolver and Corinth transaction planner for Arach OS"
 build = "build.rs"
+default-run = "arach-hwd"
 
 [features]
 default = []
