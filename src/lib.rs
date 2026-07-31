@@ -1,5 +1,6 @@
 //! Signed hardware resolution and provisioning plans for Arach OS.
 
+pub mod catalog;
 pub mod facts;
 pub mod health;
 pub mod plan;

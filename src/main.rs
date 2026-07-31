@@ -1,3 +1,4 @@
+use arach_hwd::catalog::verify_catalog;
 use arach_hwd::plan::{PLAN_SCHEMA, PlanSet};
 use arach_hwd::preflight::{PREFLIGHT_SCHEMA, preflight_inventory};
 use arach_hwd::profile::resolve;
@@ -80,13 +81,29 @@ fn plan_command(arguments: &[String]) -> Result<(), String> {
         .ok_or_else(|| "plan requires --profiles DIR".to_owned())?;
     let keyring_path =
         option(arguments, "--keyring")?.ok_or_else(|| "plan requires --keyring FILE".to_owned())?;
+    let catalog_lock = option(arguments, "--catalog-lock")?
+        .ok_or_else(|| "plan requires --catalog-lock FILE".to_owned())?;
     let driver_abi = option(arguments, "--driver-abi")?
         .ok_or_else(|| "plan requires --driver-abi MAJOR.MINOR".to_owned())?;
+    let output_path = option(arguments, "--output")?;
     reject_unknown(
         arguments,
-        &["--sysfs", "--profiles", "--keyring", "--driver-abi"],
+        &[
+            "--sysfs",
+            "--profiles",
+            "--keyring",
+            "--catalog-lock",
+            "--driver-abi",
+            "--output",
+        ],
     )?;
     let inventory = scan_inventory(&PathBuf::from(sysfs)).map_err(|error| error.to_string())?;
+    verify_catalog(
+        &PathBuf::from(catalog_lock),
+        &PathBuf::from(profile_dir.clone()),
+        &PathBuf::from(keyring_path.clone()),
+    )
+    .map_err(|error| error.to_string())?;
     let keyring = Keyring::load(&PathBuf::from(keyring_path)).map_err(|error| error.to_string())?;
     let profiles =
         load_profiles(&PathBuf::from(profile_dir), &keyring).map_err(|error| error.to_string())?;
@@ -128,7 +145,11 @@ fn plan_command(arguments: &[String]) -> Result<(), String> {
         plan: plans,
     })
     .map_err(|error| error.to_string())?;
-    print!("{output}");
+    if let Some(path) = output_path {
+        fs::write(path, format!("{output}\n")).map_err(|error| error.to_string())?;
+    } else {
+        print!("{output}");
+    }
     Ok(())
 }
 
@@ -203,5 +224,5 @@ fn has_flag(arguments: &[String], name: &str) -> Result<bool, String> {
 }
 
 fn usage() -> String {
-    "usage: arach-hwd scan [--sysfs ROOT] | arach-hwd preflight [--sysfs ROOT] [--output FILE] [--allow-unresolved] | arach-hwd plan --profiles DIR --keyring FILE --driver-abi MAJOR.MINOR [--sysfs ROOT]".into()
+    "usage: arach-hwd scan [--sysfs ROOT] | arach-hwd preflight [--sysfs ROOT] [--output FILE] [--allow-unresolved] | arach-hwd plan --profiles DIR --keyring FILE --catalog-lock FILE --driver-abi MAJOR.MINOR [--sysfs ROOT] [--output FILE]".into()
 }

@@ -27,7 +27,7 @@ The current command surface is deliberately read-only:
     arach-hwd scan [--sysfs /sys]
     arach-hwd preflight [--sysfs /sys] [--output FILE]
     arach-hwd preflight [--sysfs /sys] --allow-unresolved
-    arach-hwd plan --profiles DIR --keyring FILE --driver-abi 1.0 [--sysfs /sys]
+    arach-hwd plan --profiles DIR --keyring FILE --catalog-lock FILE --driver-abi 1.0 [--sysfs /sys] [--output FILE]
 
 `scan` emits inventory schema 2. `preflight` emits a signed-repository query
 surface for every present capability and returns failure when a physical
@@ -36,8 +36,9 @@ tools and Calamares diagnostics; it does not authorize installation. A signed
 profile and an Arach Hardware repository package intent are still required
 before Corinth may activate a driver or firmware package. `plan` refuses to
 emit a partial package set when an unresolved device has no matching signed
-profile. The plan output is the boundary for Corinth's durable transaction
-service.
+profile. With `--output`, it writes the exact plan document for the installer
+to hand to Corinth; without it, the document is printed for inspection. The
+plan output is the boundary for Corinth's durable transaction service.
 
 ## Validation
 

@@ -1,9 +1,14 @@
 # Corinth provisioning boundary
 
 Arach HWD emits inventory schema 2, preflight report schema 1, and plan schema
-1. An inventory or preflight report is discovery evidence only; a plan is
-immutable input to Corinth and is not itself proof that a package was
-installed.
+1. The Calamares medium must carry a signed profile catalog, its scoped
+keyring, a catalog lock marker, and the running Driver ABI. An inventory or
+preflight report is discovery evidence only; a plan is immutable input to
+Corinth and is not itself proof that a package was installed.
+
+The lock records the catalog snapshot, the keyring digest, and the digest of
+every profile and detached signature. `arach-hwd plan` rejects additions,
+removals, symlinks, or byte changes before it resolves a device.
 
 The preflight report contains fixed capability groups for network, wireless,
 audio, graphics, storage, input, Bluetooth, and firmware. Each unresolved
