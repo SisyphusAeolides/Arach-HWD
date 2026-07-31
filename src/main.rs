@@ -268,5 +268,5 @@ fn has_flag(arguments: &[String], name: &str) -> Result<bool, String> {
 }
 
 fn usage() -> String {
-    "usage: arach-hwd scan [--sysfs ROOT] | arach-hwd preflight [--sysfs ROOT] [--output FILE] [--allow-unresolved] | arach-hwd plan --profiles DIR --keyring FILE --catalog-lock FILE --driver-abi MAJOR.MINOR [--sysfs ROOT] [--output FILE] [--require-target-profiles]".into()
+    "usage: arach-hwd scan [--sysfs ROOT] [--modules-alias FILE] | arach-hwd preflight [--sysfs ROOT] [--modules-alias FILE] [--output FILE] [--allow-unresolved] | arach-hwd plan --profiles DIR --keyring FILE --catalog-lock FILE --driver-abi MAJOR.MINOR [--sysfs ROOT] [--modules-alias FILE] [--output FILE] [--require-target-profiles]".into()
 }
