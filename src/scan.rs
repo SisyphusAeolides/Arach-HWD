@@ -671,9 +671,7 @@ fn glob_matches(pattern: &str, value: &str) -> bool {
                 }
             }
             b'?' => {
-                for index in 1..=value.len() {
-                    next[index] = row[index - 1];
-                }
+                next[1..].copy_from_slice(&row[..value.len()]);
             }
             literal => {
                 for index in 1..=value.len() {
