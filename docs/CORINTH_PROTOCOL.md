@@ -6,6 +6,12 @@ keyring, a catalog lock marker, and the running Driver ABI. An inventory or
 preflight report is discovery evidence only; a plan is immutable input to
 Corinth and is not itself proof that a package was installed.
 
+The catalog's `packages.toml` and detached signature are the scoped
+`package-index` for prebuilt hardware payloads. Corinth may use those records
+for an exact binary install, or build the matching pinned recipe when a binary
+record is unavailable. Both paths must match every plan digest and produce
+owned-file receipts before the target is changed.
+
 The lock records the catalog snapshot, the keyring digest, and the digest of
 every profile and detached signature. `arach-hwd plan` rejects additions,
 removals, symlinks, or byte changes before it resolves a device. A release

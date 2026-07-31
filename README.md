@@ -23,6 +23,12 @@ before Calamares can mutate a target; broad hardware coverage comes from the
 signed Arach Hardware profile/index artifact, not from guessing a package name
 from a device class.
 
+The release artifact also carries a detached-signature `package-index` for
+prebuilt driver and firmware payloads. Corinth verifies that index against the
+same scoped keyring before installation; when a signed intent is not published
+there, Corinth may use its pinned Arach-Packages recipe and still requires the
+same metadata, artifact, and source-lock digests.
+
 ELAN recovery evidence is treated as health telemetry. A successful
 elan-guardian recovery keeps the device available; repeated recoveries inside
 a signed profile's time window escalate through recovered, degraded, and
