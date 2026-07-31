@@ -8,6 +8,10 @@ the exact bus/modalias identity Corinth needs to find a signed driver or
 firmware artifact. It never invents a package name from a class: unresolved
 hardware is emitted as a deterministic lookup query and is a hard preflight
 failure unless the caller explicitly asks for an inventory-only report.
+When a regular Linux `modules.alias` table is available, the scanner also
+records sorted matching Linux driver candidates for each modalias. Candidates
+help maintainers close catalog gaps; they are advisory evidence and never
+authorize an install or bypass a signed Arach profile.
 
 Profiles cannot execute shell commands. Driver and firmware intents must use
 the signed Arach hardware repository, include artifact, metadata, and source
@@ -36,12 +40,13 @@ quarantined states instead of resetting the controller forever.
 
 The current command surface is deliberately read-only:
 
-    arach-hwd scan [--sysfs /sys]
-    arach-hwd preflight [--sysfs /sys] [--output FILE]
-    arach-hwd preflight [--sysfs /sys] --allow-unresolved
-    arach-hwd plan --profiles DIR --keyring FILE --catalog-lock FILE --driver-abi 1.0 [--sysfs /sys] [--output FILE] [--require-target-profiles]
+    arach-hwd scan [--sysfs /sys] [--modules-alias FILE]
+    arach-hwd preflight [--sysfs /sys] [--modules-alias FILE] [--output FILE]
+    arach-hwd preflight [--sysfs /sys] [--modules-alias FILE] --allow-unresolved
+    arach-hwd plan --profiles DIR --keyring FILE --catalog-lock FILE --driver-abi 1.0 [--sysfs /sys] [--modules-alias FILE] [--output FILE] [--require-target-profiles]
 
-`scan` emits inventory schema 2. `preflight` emits a signed-repository query
+`scan` emits inventory schema 2. If `--modules-alias` is omitted, the CLI uses
+the regular table for the running kernel when one exists. `preflight` emits a signed-repository query
 surface for every present capability and returns failure when a physical
 device has no bound driver. `--allow-unresolved` is intended for discovery
 tools and Calamares diagnostics; it does not authorize installation. A signed

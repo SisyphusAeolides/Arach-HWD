@@ -2,7 +2,10 @@ use arach_hwd::catalog::verify_catalog;
 use arach_hwd::plan::{PLAN_SCHEMA, PlanSet};
 use arach_hwd::preflight::{PREFLIGHT_SCHEMA, preflight_inventory};
 use arach_hwd::profile::resolve;
-use arach_hwd::scan::{INVENTORY_SCHEMA, scan_inventory, target_profile_required};
+use arach_hwd::scan::{
+    INVENTORY_SCHEMA, default_modules_alias, scan_inventory_with_modules_alias,
+    target_profile_required,
+};
 use arach_hwd::signature::{Keyring, load_profiles};
 use std::collections::BTreeSet;
 use std::env;
@@ -34,10 +37,17 @@ fn run() -> Result<(), String> {
 
 fn preflight_command(arguments: &[String]) -> Result<(), String> {
     let sysfs = option(arguments, "--sysfs")?.unwrap_or_else(|| "/sys".into());
+    let modules_alias = modules_alias(arguments)?;
     let output_path = option(arguments, "--output")?;
     let allow_unresolved = has_flag(arguments, "--allow-unresolved")?;
-    reject_unknown_with_flags(arguments, &["--sysfs", "--output"], &["--allow-unresolved"])?;
-    let inventory = scan_inventory(&PathBuf::from(sysfs)).map_err(|error| error.to_string())?;
+    reject_unknown_with_flags(
+        arguments,
+        &["--sysfs", "--modules-alias", "--output"],
+        &["--allow-unresolved"],
+    )?;
+    let inventory =
+        scan_inventory_with_modules_alias(&PathBuf::from(sysfs), modules_alias.as_deref())
+            .map_err(|error| error.to_string())?;
     if inventory.schema != INVENTORY_SCHEMA {
         return Err(format!(
             "scanner emitted inventory schema {}, expected {}",
@@ -68,8 +78,11 @@ fn preflight_command(arguments: &[String]) -> Result<(), String> {
 
 fn scan_command(arguments: &[String]) -> Result<(), String> {
     let sysfs = option(arguments, "--sysfs")?.unwrap_or_else(|| "/sys".into());
-    reject_unknown(arguments, &["--sysfs"])?;
-    let inventory = scan_inventory(&PathBuf::from(sysfs)).map_err(|error| error.to_string())?;
+    let modules_alias = modules_alias(arguments)?;
+    reject_unknown(arguments, &["--sysfs", "--modules-alias"])?;
+    let inventory =
+        scan_inventory_with_modules_alias(&PathBuf::from(sysfs), modules_alias.as_deref())
+            .map_err(|error| error.to_string())?;
     let output = toml::to_string_pretty(&inventory).map_err(|error| error.to_string())?;
     print!("{output}");
     Ok(())
@@ -77,6 +90,7 @@ fn scan_command(arguments: &[String]) -> Result<(), String> {
 
 fn plan_command(arguments: &[String]) -> Result<(), String> {
     let sysfs = option(arguments, "--sysfs")?.unwrap_or_else(|| "/sys".into());
+    let modules_alias = modules_alias(arguments)?;
     let profile_dir = option(arguments, "--profiles")?
         .ok_or_else(|| "plan requires --profiles DIR".to_owned())?;
     let keyring_path =
@@ -91,6 +105,7 @@ fn plan_command(arguments: &[String]) -> Result<(), String> {
         arguments,
         &[
             "--sysfs",
+            "--modules-alias",
             "--profiles",
             "--keyring",
             "--catalog-lock",
@@ -99,7 +114,9 @@ fn plan_command(arguments: &[String]) -> Result<(), String> {
         ],
         &["--require-target-profiles"],
     )?;
-    let inventory = scan_inventory(&PathBuf::from(sysfs)).map_err(|error| error.to_string())?;
+    let inventory =
+        scan_inventory_with_modules_alias(&PathBuf::from(sysfs), modules_alias.as_deref())
+            .map_err(|error| error.to_string())?;
     verify_catalog(
         &PathBuf::from(catalog_lock),
         &PathBuf::from(profile_dir.clone()),
@@ -191,6 +208,12 @@ fn option(arguments: &[String], name: &str) -> Result<Option<String>, String> {
         }
     }
     Ok(result)
+}
+
+fn modules_alias(arguments: &[String]) -> Result<Option<PathBuf>, String> {
+    Ok(option(arguments, "--modules-alias")?
+        .map(PathBuf::from)
+        .or_else(default_modules_alias))
 }
 
 fn reject_unknown(arguments: &[String], known: &[&str]) -> Result<(), String> {

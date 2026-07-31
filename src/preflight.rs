@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Version of the installer-facing capability report.
-pub const PREFLIGHT_SCHEMA: u32 = 1;
+pub const PREFLIGHT_SCHEMA: u32 = 2;
 
 /// A device without a bound kernel driver.  The modalias and identity fields
 /// are the exact lookup key for Corinth's signed `arach-hardware` index.
@@ -19,6 +19,11 @@ pub struct UnresolvedDevice {
     pub product: Option<u32>,
     pub class: Option<u32>,
     pub current_driver: Option<String>,
+    /// Linux modules.alias candidates observed on the live medium.  These
+    /// names help catalog authors close coverage gaps; they never authorize
+    /// an install and are not substituted for a signed Arach profile.
+    #[serde(default)]
+    pub candidate_drivers: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -54,6 +59,17 @@ pub fn preflight_inventory(inventory: &Inventory) -> PreflightReport {
                 product: device.product,
                 class: device.class,
                 current_driver: device.driver.clone(),
+                candidate_drivers: device
+                    .properties
+                    .get("linux_driver_candidates")
+                    .map(|value| {
+                        value
+                            .split(',')
+                            .filter(|driver| !driver.is_empty())
+                            .map(ToOwned::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
             });
         }
     }
@@ -93,7 +109,13 @@ mod tests {
             class: Some(0x020000),
             revision: None,
             driver: None,
-            properties: BTreeMap::from([(String::from("sysfs_class"), String::from("net"))]),
+            properties: BTreeMap::from([
+                (String::from("sysfs_class"), String::from("net")),
+                (
+                    String::from("linux_driver_candidates"),
+                    String::from("iwlwifi,ath12k"),
+                ),
+            ]),
         };
         let inventory = Inventory {
             schema: 2,
@@ -110,5 +132,9 @@ mod tests {
         let report = preflight_inventory(&inventory);
         assert!(!report.ready);
         assert_eq!(report.unresolved[0].modalias, "pci:v00008086d00001234");
+        assert_eq!(
+            report.unresolved[0].candidate_drivers,
+            vec!["iwlwifi".to_owned(), "ath12k".to_owned()]
+        );
     }
 }

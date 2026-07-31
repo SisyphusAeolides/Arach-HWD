@@ -1,6 +1,6 @@
 # Corinth provisioning boundary
 
-Arach HWD emits inventory schema 2, preflight report schema 1, and plan schema
+Arach HWD emits inventory schema 2, preflight report schema 2, and plan schema
 1. The Calamares medium must carry a signed profile catalog, its scoped
 keyring, a catalog lock marker, and the running Driver ABI. An inventory or
 preflight report is discovery evidence only; a plan is immutable input to

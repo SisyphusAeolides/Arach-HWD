@@ -28,7 +28,7 @@ jobs:
       - run: cargo run --locked -- scan --sysfs /sys > /tmp/arach-hwd-inventory.toml
       - run: grep -Fxq 'schema = 2' /tmp/arach-hwd-inventory.toml
       - run: cargo run --locked -- preflight --sysfs /sys --allow-unresolved --output /tmp/arach-hwd-preflight.toml
-      - run: grep -Fxq 'schema = 1' /tmp/arach-hwd-preflight.toml
+      - run: grep -Fxq 'schema = 2' /tmp/arach-hwd-preflight.toml
 
   fortran:
     runs-on: ubuntu-24.04

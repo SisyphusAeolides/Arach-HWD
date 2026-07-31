@@ -9,6 +9,17 @@ use std::path::{Path, PathBuf};
 pub const INVENTORY_SCHEMA: u32 = 2;
 
 pub fn scan_inventory(sysfs_root: &Path) -> io::Result<Inventory> {
+    scan_inventory_with_modules_alias(sysfs_root, None)
+}
+
+/// Scan the hardware tree and, when supplied, annotate every modalias with
+/// the Linux modules that advertise a matching alias.  The candidates are
+/// discovery evidence only: a signed Arach profile is still required before
+/// Corinth may build or install anything for the target kernel.
+pub fn scan_inventory_with_modules_alias(
+    sysfs_root: &Path,
+    modules_alias: Option<&Path>,
+) -> io::Result<Inventory> {
     let mut devices = Vec::new();
     scan_pci(sysfs_root, &mut devices)?;
     scan_usb(sysfs_root, &mut devices)?;
@@ -21,12 +32,36 @@ pub fn scan_inventory(sysfs_root: &Path) -> io::Result<Inventory> {
     scan_class_devices(sysfs_root, &mut devices)?;
     devices.sort_by(|left, right| left.key.cmp(&right.key));
     devices.dedup_by(|left, right| left.key == right.key);
+    if let Some(path) = modules_alias {
+        annotate_linux_driver_candidates(&mut devices, path)?;
+    }
     let capabilities = capability_requirements(&devices);
     Ok(Inventory {
         schema: INVENTORY_SCHEMA,
         system: scan_system(sysfs_root),
         devices,
         capabilities,
+    })
+}
+
+/// Locate the alias table belonging to the running Linux kernel.  This is
+/// intentionally best-effort; a minimal live image may not ship Linux module
+/// metadata, and the signed Arach catalog remains the authoritative source.
+pub fn default_modules_alias() -> Option<PathBuf> {
+    let release = fs::read_to_string("/proc/sys/kernel/osrelease").ok()?;
+    let release = release.trim();
+    if release.is_empty() {
+        return None;
+    }
+    [
+        PathBuf::from(format!("/lib/modules/{release}/modules.alias")),
+        PathBuf::from(format!("/usr/lib/modules/{release}/modules.alias")),
+    ]
+    .into_iter()
+    .find(|path| {
+        fs::symlink_metadata(path)
+            .map(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+            .unwrap_or(false)
     })
 }
 
@@ -514,6 +549,141 @@ fn read_uevent_field(path: &Path, key: &str) -> Option<String> {
 
 fn read_first_hex(paths: &[PathBuf]) -> Option<u32> {
     paths.iter().find_map(|path| read_hex(path.clone()))
+}
+
+const MAX_MODULES_ALIAS_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_DRIVER_CANDIDATES: usize = 32;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LinuxAlias {
+    pattern: String,
+    driver: String,
+    literal_prefix: String,
+}
+
+fn annotate_linux_driver_candidates(
+    devices: &mut [HardwareDevice],
+    modules_alias: &Path,
+) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(modules_alias)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "modules alias table is not a regular file: {}",
+                modules_alias.display()
+            ),
+        ));
+    }
+    if metadata.len() > MAX_MODULES_ALIAS_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "modules alias table exceeds {} bytes: {}",
+                MAX_MODULES_ALIAS_BYTES,
+                modules_alias.display()
+            ),
+        ));
+    }
+    let text = fs::read_to_string(modules_alias)?;
+    let aliases = parse_modules_alias(&text);
+    for device in devices {
+        if device.modalias.is_empty() {
+            continue;
+        }
+        let mut candidates = aliases
+            .iter()
+            .filter(|alias| device.modalias.starts_with(&alias.literal_prefix))
+            .filter(|alias| glob_matches(&alias.pattern, &device.modalias))
+            .map(|alias| alias.driver.as_str())
+            .collect::<BTreeSet<_>>();
+        if candidates.len() > MAX_DRIVER_CANDIDATES {
+            candidates = candidates.into_iter().take(MAX_DRIVER_CANDIDATES).collect();
+        }
+        if !candidates.is_empty() {
+            device.properties.insert(
+                "linux_driver_candidates".into(),
+                candidates.into_iter().collect::<Vec<_>>().join(","),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn parse_modules_alias(text: &str) -> Vec<LinuxAlias> {
+    let mut aliases = Vec::new();
+    for line in text.lines() {
+        let mut fields = line.split_ascii_whitespace();
+        if fields.next() != Some("alias") {
+            continue;
+        }
+        let (Some(pattern), Some(driver)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        if fields.next().is_some()
+            || pattern.is_empty()
+            || !valid_driver_candidate(driver)
+            || aliases
+                .iter()
+                .any(|alias: &LinuxAlias| alias.pattern == pattern && alias.driver == driver)
+        {
+            continue;
+        }
+        aliases.push(LinuxAlias {
+            pattern: pattern.to_owned(),
+            driver: driver.to_owned(),
+            literal_prefix: pattern
+                .bytes()
+                .take_while(|byte| !matches!(byte, b'*' | b'?'))
+                .map(char::from)
+                .collect(),
+        });
+    }
+    aliases.sort_by(|left, right| {
+        left.pattern
+            .cmp(&right.pattern)
+            .then_with(|| left.driver.cmp(&right.driver))
+    });
+    aliases
+}
+
+fn valid_driver_candidate(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+}
+
+/// Match the small glob language used by Linux `modules.alias` (`*` and
+/// `?`).  A dynamic-programming implementation keeps matching bounded by the
+/// two input lengths and avoids treating alias text as a regular expression.
+fn glob_matches(pattern: &str, value: &str) -> bool {
+    let value = value.as_bytes();
+    let mut row = vec![false; value.len() + 1];
+    row[0] = true;
+    for pattern_byte in pattern.bytes() {
+        let mut next = vec![false; value.len() + 1];
+        match pattern_byte {
+            b'*' => {
+                next[0] = row[0];
+                for index in 1..=value.len() {
+                    next[index] = row[index] || next[index - 1];
+                }
+            }
+            b'?' => {
+                for index in 1..=value.len() {
+                    next[index] = row[index - 1];
+                }
+            }
+            literal => {
+                for index in 1..=value.len() {
+                    next[index] = row[index - 1] && value[index - 1] == literal;
+                }
+            }
+        }
+        row = next;
+    }
+    row[value.len()]
 }
 
 fn capability_requirements(devices: &[HardwareDevice]) -> Vec<CapabilityRequirement> {
@@ -1062,5 +1232,44 @@ mod tests {
             .unwrap();
         assert!(audio.device_keys.is_empty());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn modules_alias_candidates_are_sorted_and_advisory() {
+        let root = scratch();
+        let pci = root.join("bus/pci/devices/0000:00:14.3");
+        fs::create_dir_all(&pci).unwrap();
+        fs::write(pci.join("vendor"), "8086\n").unwrap();
+        fs::write(pci.join("device"), "2723\n").unwrap();
+        fs::write(
+            pci.join("modalias"),
+            "pci:v00008086d00002723sv00001028sd00000001bc02sc80i00\n",
+        )
+        .unwrap();
+        let aliases = root.join("modules.alias");
+        fs::write(
+            &aliases,
+            "# comment\nalias pci:v00008086d00002723sv*sd*bc02sc* iwlwifi\nalias pci:v00008086d00002723* zzz-driver\nalias pci:v00008086d00002723* iwlwifi\nalias pci:v00008086d00002723* invalid/driver\n",
+        )
+        .unwrap();
+
+        let inventory = scan_inventory_with_modules_alias(&root, Some(&aliases)).unwrap();
+        let device = inventory
+            .devices
+            .iter()
+            .find(|device| device.key == "pci:0000:00:14.3")
+            .unwrap();
+        assert_eq!(
+            device.properties.get("linux_driver_candidates"),
+            Some(&String::from("iwlwifi,zzz-driver"))
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn glob_alias_matching_supports_only_bounded_wildcards() {
+        assert!(glob_matches("pci:v00008086d*", "pci:v00008086d00001234"));
+        assert!(glob_matches("hid:b????g*", "hid:b0003g"));
+        assert!(!glob_matches("pci:v000010de*", "pci:v00008086d00001234"));
     }
 }
