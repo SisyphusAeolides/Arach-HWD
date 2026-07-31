@@ -17,8 +17,9 @@ pub use plan::{ProvisionPlan, build_plan};
 pub use preflight::{PREFLIGHT_SCHEMA, PreflightReport, UnresolvedDevice, preflight_inventory};
 pub use profile::{HardwareProfile, ResolveError, VerifiedProfile, resolve};
 pub use scan::{
-    default_modules_alias, default_modules_aliases, default_modules_builtin_files,
-    default_modules_dep_files, default_modules_firmware, default_modules_firmware_files,
-    scan_inventory, scan_inventory_with_driver_metadata, scan_inventory_with_modules_alias,
+    default_firmware_roots, default_modules_alias, default_modules_aliases,
+    default_modules_builtin_files, default_modules_dep_files, default_modules_firmware,
+    default_modules_firmware_files, scan_inventory, scan_inventory_with_driver_metadata,
+    scan_inventory_with_driver_sources, scan_inventory_with_modules_alias,
     scan_inventory_with_modules_metadata,
 };

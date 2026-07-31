@@ -53,6 +53,29 @@ pub fn scan_inventory_with_driver_metadata(
     modules_dep: &[PathBuf],
     modules_builtin: &[PathBuf],
 ) -> io::Result<Inventory> {
+    scan_inventory_with_driver_sources(
+        sysfs_root,
+        modules_alias,
+        modules_firmware,
+        modules_dep,
+        modules_builtin,
+        &[],
+    )
+}
+
+/// Scan hardware and annotate it with module metadata plus the firmware roots
+/// available to the installer.  The extra firmware-root argument is kept
+/// separate from the Linux metadata tables because Calamares can stage a
+/// target firmware tree independently of the live kernel.  Every discovered
+/// path is evidence only; signed Arach intents still authorize installation.
+pub fn scan_inventory_with_driver_sources(
+    sysfs_root: &Path,
+    modules_alias: &[PathBuf],
+    modules_firmware: &[PathBuf],
+    modules_dep: &[PathBuf],
+    modules_builtin: &[PathBuf],
+    firmware_roots: &[PathBuf],
+) -> io::Result<Inventory> {
     let mut devices = Vec::new();
     scan_pci(sysfs_root, &mut devices)?;
     scan_usb(sysfs_root, &mut devices)?;
@@ -68,8 +91,11 @@ pub fn scan_inventory_with_driver_metadata(
     if !modules_alias.is_empty() {
         annotate_linux_driver_candidates(&mut devices, modules_alias)?;
     }
-    if !modules_firmware.is_empty() {
+    if !modules_firmware.is_empty() || !firmware_roots.is_empty() {
         annotate_linux_firmware_candidates(&mut devices, modules_firmware)?;
+    }
+    if !firmware_roots.is_empty() {
+        annotate_linux_firmware_files(&mut devices, firmware_roots)?;
     }
     if !modules_dep.is_empty() || !modules_builtin.is_empty() {
         annotate_linux_driver_files(&mut devices, modules_dep, modules_builtin)?;
@@ -126,6 +152,28 @@ pub fn default_modules_dep_files() -> Vec<PathBuf> {
 /// them makes the target coverage decision explicit and reproducible.
 pub fn default_modules_builtin_files() -> Vec<PathBuf> {
     default_modules_files("modules.builtin")
+}
+
+/// Discover firmware roots from both the live medium and the conventional
+/// Calamares staging locations.  The list is sorted and deduplicated so an
+/// inventory is reproducible even when both `/lib` and `/usr/lib` expose the
+/// same tree.
+pub fn default_firmware_roots() -> Vec<PathBuf> {
+    let roots = [
+        "/lib/firmware",
+        "/usr/lib/firmware",
+        "/run/arach/target-firmware",
+        "/mnt/lib/firmware",
+        "/mnt/usr/lib/firmware",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .filter(|path| path.is_dir())
+    .collect::<Vec<_>>();
+    let mut roots = roots;
+    roots.sort();
+    roots.dedup();
+    roots
 }
 
 fn default_modules_files(file: &str) -> Vec<PathBuf> {
@@ -671,6 +719,7 @@ const MAX_MODULES_FIRMWARE_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_DRIVER_CANDIDATES: usize = 32;
 const MAX_DRIVER_FILES: usize = 64;
 const MAX_FIRMWARE_CANDIDATES: usize = 64;
+const MAX_FIRMWARE_FILES: usize = 64;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct LinuxAlias {
@@ -937,6 +986,61 @@ fn annotate_linux_firmware_candidates(
             device.properties.insert(
                 "linux_firmware_candidates".into(),
                 firmware.into_iter().collect::<Vec<_>>().join(","),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Resolve advisory firmware names against the exact roots visible to the
+/// installer.  Firmware is commonly compressed on disk even though
+/// `modules.firmware` records the uncompressed lookup name, so the bounded
+/// suffix set mirrors the formats accepted by Linux distributions.  We keep
+/// every matching path (rather than selecting one arbitrarily) so a live and
+/// staged target tree remain distinguishable in the serialized inventory.
+fn annotate_linux_firmware_files(
+    devices: &mut [HardwareDevice],
+    firmware_roots: &[PathBuf],
+) -> io::Result<()> {
+    let mut roots = firmware_roots.to_vec();
+    roots.sort();
+    roots.dedup();
+    for root in &roots {
+        let metadata = fs::symlink_metadata(root)?;
+        if !metadata.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("firmware root is not a directory: {}", root.display()),
+            ));
+        }
+    }
+
+    for device in devices {
+        let Some(value) = device.properties.get("linux_firmware_candidates") else {
+            continue;
+        };
+        let candidates = value
+            .split(',')
+            .filter(|candidate| valid_firmware_candidate(candidate))
+            .collect::<BTreeSet<_>>();
+        let mut files = BTreeSet::new();
+        for candidate in candidates {
+            for root in &roots {
+                for suffix in ["", ".xz", ".zst", ".gz", ".bz2", ".lz4", ".lz"] {
+                    let path = root.join(format!("{candidate}{suffix}"));
+                    if is_regular_non_symlink(&path) {
+                        files.insert(format!("{candidate}={}", path.display()));
+                    }
+                }
+            }
+        }
+        if files.len() > MAX_FIRMWARE_FILES {
+            files = files.into_iter().take(MAX_FIRMWARE_FILES).collect();
+        }
+        if !files.is_empty() {
+            device.properties.insert(
+                "linux_firmware_files".into(),
+                files.into_iter().collect::<Vec<_>>().join(","),
             );
         }
     }
@@ -1775,6 +1879,63 @@ mod tests {
         assert_eq!(
             device.properties.get("linux_driver_builtins"),
             Some(&String::from("iwlwifi"))
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn firmware_candidates_are_resolved_against_live_and_target_roots() {
+        let root = scratch();
+        let pci = root.join("bus/pci/devices/0000:00:14.3");
+        let firmware_root = root.join("live-firmware");
+        let target_root = root.join("target-firmware");
+        fs::create_dir_all(&pci).unwrap();
+        fs::create_dir_all(firmware_root.join("iwlwifi")).unwrap();
+        fs::create_dir_all(target_root.join("ath12k/WCN3990/hw1.0")).unwrap();
+        fs::write(pci.join("vendor"), "8086\n").unwrap();
+        fs::write(pci.join("device"), "2723\n").unwrap();
+        fs::write(
+            pci.join("modalias"),
+            "pci:v00008086d00002723sv00001028sd00000001bc02sc80i00\n",
+        )
+        .unwrap();
+        let aliases = root.join("modules.alias");
+        fs::write(
+            &aliases,
+            "alias pci:v00008086d00002723* iwlwifi\nalias pci:v00008086d00002723* ath12k\n",
+        )
+        .unwrap();
+        let modules_firmware = root.join("modules.firmware");
+        fs::write(
+            &modules_firmware,
+            "kernel/drivers/net/wireless/iwlwifi.ko: iwlwifi/iwlwifi-a.bin\n\
+             kernel/drivers/net/wireless/ath12k.ko: ath12k/WCN3990/hw1.0/amss.bin\n",
+        )
+        .unwrap();
+        fs::write(firmware_root.join("iwlwifi/iwlwifi-a.bin.xz"), b"live").unwrap();
+        fs::write(target_root.join("ath12k/WCN3990/hw1.0/amss.bin"), b"target").unwrap();
+
+        let inventory = scan_inventory_with_driver_sources(
+            &root,
+            &[aliases],
+            &[modules_firmware],
+            &[],
+            &[],
+            &[firmware_root, target_root],
+        )
+        .unwrap();
+        let device = inventory
+            .devices
+            .iter()
+            .find(|device| device.key == "pci:0000:00:14.3")
+            .unwrap();
+        assert_eq!(
+            device.properties.get("linux_firmware_files"),
+            Some(&format!(
+                "ath12k/WCN3990/hw1.0/amss.bin={}/ath12k/WCN3990/hw1.0/amss.bin,iwlwifi/iwlwifi-a.bin={}/iwlwifi/iwlwifi-a.bin.xz",
+                root.join("target-firmware").display(),
+                root.join("live-firmware").display(),
+            ))
         );
         fs::remove_dir_all(root).unwrap();
     }

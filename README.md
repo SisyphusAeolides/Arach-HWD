@@ -11,11 +11,14 @@ failure unless the caller explicitly asks for an inventory-only report.
 When regular Linux `modules.alias`, `modules.dep`, `modules.builtin`, and
 `modules.firmware` tables are available, the scanner records sorted matching
 driver candidates, exact module payload paths, built-in status, and firmware
-requirements for each modalias. Multiple tables may be supplied (for example,
-the live kernel and the target Arach kernel), so a driver present only in the
-target image is still visible during Calamares preflight. This is the complete
-metadata surface available from a kernel image; it does not pretend that a
-missing signed Arach profile or firmware artifact is installable. Candidates
+requirements for each modalias. It also resolves those firmware names against
+the live and staged target firmware roots and records every exact path found,
+including common compressed forms. Multiple metadata tables and firmware roots
+may be supplied (for example, the live kernel and the target Arach kernel), so
+a driver or firmware blob present only in the target image is still visible
+during Calamares preflight. This is the complete metadata surface available
+from the supplied kernel and firmware trees; it does not pretend that a
+missing signed Arach profile or package artifact is installable. Candidates
 help maintainers close catalog gaps and remain advisory evidence until a
 signed profile and package intent authorize a transaction.
 
@@ -46,12 +49,12 @@ quarantined states instead of resetting the controller forever.
 
 The current command surface is deliberately read-only:
 
-    arach-hwd scan [--sysfs /sys] [--modules-alias FILE]... [--modules-firmware FILE]... [--modules-dep FILE]... [--modules-builtin FILE]...
-    arach-hwd preflight [--sysfs /sys] [--modules-alias FILE]... [--modules-firmware FILE]... [--modules-dep FILE]... [--modules-builtin FILE]... [--output FILE]
-    arach-hwd preflight [--sysfs /sys] [--modules-alias FILE]... [--modules-firmware FILE]... [--modules-dep FILE]... [--modules-builtin FILE]... --allow-unresolved
-    arach-hwd plan --profiles DIR --keyring FILE --catalog-lock FILE --driver-abi 1.0 [--sysfs /sys] [--modules-alias FILE]... [--modules-firmware FILE]... [--modules-dep FILE]... [--modules-builtin FILE]... [--output FILE] [--require-target-profiles]
+    arach-hwd scan [--sysfs /sys] [--modules-alias FILE]... [--modules-firmware FILE]... [--modules-dep FILE]... [--modules-builtin FILE]... [--firmware-root DIR]...
+    arach-hwd preflight [--sysfs /sys] [--modules-alias FILE]... [--modules-firmware FILE]... [--modules-dep FILE]... [--modules-builtin FILE]... [--firmware-root DIR]... [--output FILE]
+    arach-hwd preflight [--sysfs /sys] [--modules-alias FILE]... [--modules-firmware FILE]... [--modules-dep FILE]... [--modules-builtin FILE]... [--firmware-root DIR]... --allow-unresolved
+    arach-hwd plan --profiles DIR --keyring FILE --catalog-lock FILE --driver-abi 1.0 [--sysfs /sys] [--modules-alias FILE]... [--modules-firmware FILE]... [--modules-dep FILE]... [--modules-builtin FILE]... [--firmware-root DIR]... [--output FILE] [--require-target-profiles]
 
-`scan` emits inventory schema 3. If the metadata options are omitted, the CLI
+`scan` emits inventory schema 3 and `preflight` emits report schema 4. If the metadata options are omitted, the CLI
 discovers every regular, non-symlink `modules.alias`, `modules.dep`,
 `modules.builtin`, and `modules.firmware`
 table under `/lib/modules`, `/usr/lib/modules`, `/run/arach/target-modules`,
@@ -62,9 +65,16 @@ inventory properties `linux_driver_files`, `linux_driver_dependencies`, and
 `linux_driver_builtins` preserve the target module payload evidence so Wi-Fi,
 audio, graphics, storage, input, and Bluetooth profiles can be audited against
 exact files and dependencies rather than a class name or the live kernel's
-current binding.
-Repeat either option to provide an explicit live/target set (explicit paths
-must be regular files). The tables only provide candidate evidence; signed
+current binding. With no explicit `--firmware-root`, the CLI also checks
+`/lib/firmware`, `/usr/lib/firmware`, `/run/arach/target-firmware`, and staged
+`/mnt` firmware roots. Exact matches are recorded in
+`linux_firmware_files`; the preflight report carries those exact driver and
+firmware paths for each unresolved device. A missing firmware file remains
+unresolved rather than being treated as available merely because a module
+metadata line names it.
+Repeat the metadata options to provide an explicit live/target table set
+(explicit table paths must be regular files), or repeat `--firmware-root` with
+firmware directories. The tables only provide candidate evidence; signed
 Arach profiles and the package index remain the authority. `preflight` emits a signed-repository query
 surface for every present capability and returns failure when a physical
 device has no bound driver. `--allow-unresolved` is intended for discovery

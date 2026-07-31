@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Version of the installer-facing capability report.
-pub const PREFLIGHT_SCHEMA: u32 = 3;
+pub const PREFLIGHT_SCHEMA: u32 = 4;
 
 /// A device without a bound kernel driver.  The modalias and identity fields
 /// are the exact lookup key for Corinth's signed `arach-hardware` index.
@@ -29,6 +29,21 @@ pub struct UnresolvedDevice {
     /// Corinth still requires an exact signed firmware intent.
     #[serde(default)]
     pub candidate_firmware: Vec<String>,
+    /// Exact module payload paths matched by the supplied `modules.dep`
+    /// tables.  These remain evidence until a signed package intent binds
+    /// them to the target Arach kernel.
+    #[serde(default)]
+    pub candidate_driver_files: Vec<String>,
+    /// Exact dependency paths required by each candidate module.
+    #[serde(default)]
+    pub candidate_driver_dependencies: Vec<String>,
+    /// Candidate modules already built into a supplied target kernel.
+    #[serde(default)]
+    pub candidate_driver_builtins: Vec<String>,
+    /// Exact firmware paths found under the supplied live/target firmware
+    /// roots, including compressed payloads.
+    #[serde(default)]
+    pub candidate_firmware_files: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -86,6 +101,10 @@ pub fn preflight_inventory(inventory: &Inventory) -> PreflightReport {
                             .collect()
                     })
                     .unwrap_or_default(),
+                candidate_driver_files: property_values(device, "linux_driver_files"),
+                candidate_driver_dependencies: property_values(device, "linux_driver_dependencies"),
+                candidate_driver_builtins: property_values(device, "linux_driver_builtins"),
+                candidate_firmware_files: property_values(device, "linux_firmware_files"),
             });
         }
     }
@@ -101,6 +120,20 @@ pub fn preflight_inventory(inventory: &Inventory) -> PreflightReport {
         requirements: inventory.capabilities.clone(),
         unresolved,
     }
+}
+
+fn property_values(device: &crate::facts::HardwareDevice, key: &str) -> Vec<String> {
+    device
+        .properties
+        .get(key)
+        .map(|value| {
+            value
+                .split(',')
+                .filter(|item| !item.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -135,6 +168,14 @@ mod tests {
                     String::from("linux_firmware_candidates"),
                     String::from("iwlwifi-a.bin,ath12k/test.bin"),
                 ),
+                (
+                    String::from("linux_driver_files"),
+                    String::from("iwlwifi=kernel/drivers/net/iwlwifi.ko.xz"),
+                ),
+                (
+                    String::from("linux_firmware_files"),
+                    String::from("iwlwifi-a.bin=/lib/firmware/iwlwifi-a.bin.xz"),
+                ),
             ]),
         };
         let inventory = Inventory {
@@ -159,6 +200,14 @@ mod tests {
         assert_eq!(
             report.unresolved[0].candidate_firmware,
             vec!["iwlwifi-a.bin".to_owned(), "ath12k/test.bin".to_owned()]
+        );
+        assert_eq!(
+            report.unresolved[0].candidate_driver_files,
+            vec!["iwlwifi=kernel/drivers/net/iwlwifi.ko.xz".to_owned()]
+        );
+        assert_eq!(
+            report.unresolved[0].candidate_firmware_files,
+            vec!["iwlwifi-a.bin=/lib/firmware/iwlwifi-a.bin.xz".to_owned()]
         );
     }
 }

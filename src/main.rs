@@ -3,9 +3,9 @@ use arach_hwd::plan::{PLAN_SCHEMA, PlanSet};
 use arach_hwd::preflight::{PREFLIGHT_SCHEMA, preflight_inventory};
 use arach_hwd::profile::resolve;
 use arach_hwd::scan::{
-    INVENTORY_SCHEMA, default_modules_aliases, default_modules_builtin_files,
-    default_modules_dep_files, default_modules_firmware_files, scan_inventory_with_driver_metadata,
-    target_profile_required,
+    INVENTORY_SCHEMA, default_firmware_roots, default_modules_aliases,
+    default_modules_builtin_files, default_modules_dep_files, default_modules_firmware_files,
+    scan_inventory_with_driver_sources, target_profile_required,
 };
 use arach_hwd::signature::{Keyring, load_profiles};
 use std::collections::BTreeSet;
@@ -42,6 +42,7 @@ fn preflight_command(arguments: &[String]) -> Result<(), String> {
     let modules_firmware = modules_firmware(arguments)?;
     let modules_dep = modules_dep(arguments)?;
     let modules_builtin = modules_builtin(arguments)?;
+    let firmware_roots = firmware_roots(arguments)?;
     let output_path = option(arguments, "--output")?;
     let allow_unresolved = has_flag(arguments, "--allow-unresolved")?;
     reject_unknown_with_flags(
@@ -52,16 +53,18 @@ fn preflight_command(arguments: &[String]) -> Result<(), String> {
             "--modules-firmware",
             "--modules-dep",
             "--modules-builtin",
+            "--firmware-root",
             "--output",
         ],
         &["--allow-unresolved"],
     )?;
-    let inventory = scan_inventory_with_driver_metadata(
+    let inventory = scan_inventory_with_driver_sources(
         &PathBuf::from(sysfs),
         &modules_alias,
         &modules_firmware,
         &modules_dep,
         &modules_builtin,
+        &firmware_roots,
     )
     .map_err(|error| error.to_string())?;
     if inventory.schema != INVENTORY_SCHEMA {
@@ -98,6 +101,7 @@ fn scan_command(arguments: &[String]) -> Result<(), String> {
     let modules_firmware = modules_firmware(arguments)?;
     let modules_dep = modules_dep(arguments)?;
     let modules_builtin = modules_builtin(arguments)?;
+    let firmware_roots = firmware_roots(arguments)?;
     reject_unknown(
         arguments,
         &[
@@ -106,14 +110,16 @@ fn scan_command(arguments: &[String]) -> Result<(), String> {
             "--modules-firmware",
             "--modules-dep",
             "--modules-builtin",
+            "--firmware-root",
         ],
     )?;
-    let inventory = scan_inventory_with_driver_metadata(
+    let inventory = scan_inventory_with_driver_sources(
         &PathBuf::from(sysfs),
         &modules_alias,
         &modules_firmware,
         &modules_dep,
         &modules_builtin,
+        &firmware_roots,
     )
     .map_err(|error| error.to_string())?;
     let output = toml::to_string_pretty(&inventory).map_err(|error| error.to_string())?;
@@ -127,6 +133,7 @@ fn plan_command(arguments: &[String]) -> Result<(), String> {
     let modules_firmware = modules_firmware(arguments)?;
     let modules_dep = modules_dep(arguments)?;
     let modules_builtin = modules_builtin(arguments)?;
+    let firmware_roots = firmware_roots(arguments)?;
     let profile_dir = option(arguments, "--profiles")?
         .ok_or_else(|| "plan requires --profiles DIR".to_owned())?;
     let keyring_path =
@@ -145,6 +152,7 @@ fn plan_command(arguments: &[String]) -> Result<(), String> {
             "--modules-firmware",
             "--modules-dep",
             "--modules-builtin",
+            "--firmware-root",
             "--profiles",
             "--keyring",
             "--catalog-lock",
@@ -153,12 +161,13 @@ fn plan_command(arguments: &[String]) -> Result<(), String> {
         ],
         &["--require-target-profiles"],
     )?;
-    let inventory = scan_inventory_with_driver_metadata(
+    let inventory = scan_inventory_with_driver_sources(
         &PathBuf::from(sysfs),
         &modules_alias,
         &modules_firmware,
         &modules_dep,
         &modules_builtin,
+        &firmware_roots,
     )
     .map_err(|error| error.to_string())?;
     verify_catalog(
@@ -302,6 +311,18 @@ fn modules_builtin(arguments: &[String]) -> Result<Vec<PathBuf>, String> {
     }
 }
 
+fn firmware_roots(arguments: &[String]) -> Result<Vec<PathBuf>, String> {
+    let paths = options(arguments, "--firmware-root")?
+        .into_iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    if paths.is_empty() {
+        Ok(default_firmware_roots())
+    } else {
+        Ok(paths)
+    }
+}
+
 fn options(arguments: &[String], name: &str) -> Result<Vec<String>, String> {
     let mut values = Vec::new();
     let mut index = 0;
@@ -371,5 +392,5 @@ fn has_flag(arguments: &[String], name: &str) -> Result<bool, String> {
 }
 
 fn usage() -> String {
-    "usage: arach-hwd scan [--sysfs ROOT] [--modules-alias FILE]... [--modules-firmware FILE]... [--modules-dep FILE]... [--modules-builtin FILE]... | arach-hwd preflight [--sysfs ROOT] [--modules-alias FILE]... [--modules-firmware FILE]... [--modules-dep FILE]... [--modules-builtin FILE]... [--output FILE] [--allow-unresolved] | arach-hwd plan --profiles DIR --keyring FILE --catalog-lock FILE --driver-abi MAJOR.MINOR [--sysfs ROOT] [--modules-alias FILE]... [--modules-firmware FILE]... [--modules-dep FILE]... [--modules-builtin FILE]... [--output FILE] [--require-target-profiles]".into()
+    "usage: arach-hwd scan [--sysfs ROOT] [--modules-alias FILE]... [--modules-firmware FILE]... [--modules-dep FILE]... [--modules-builtin FILE]... [--firmware-root DIR]... | arach-hwd preflight [--sysfs ROOT] [--modules-alias FILE]... [--modules-firmware FILE]... [--modules-dep FILE]... [--modules-builtin FILE]... [--firmware-root DIR]... [--output FILE] [--allow-unresolved] | arach-hwd plan --profiles DIR --keyring FILE --catalog-lock FILE --driver-abi MAJOR.MINOR [--sysfs ROOT] [--modules-alias FILE]... [--modules-firmware FILE]... [--modules-dep FILE]... [--modules-builtin FILE]... [--firmware-root DIR]... [--output FILE] [--require-target-profiles]".into()
 }
