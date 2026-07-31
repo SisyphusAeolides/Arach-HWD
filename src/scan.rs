@@ -87,6 +87,31 @@ pub fn scan_inventory_with_driver_sources(
     scan_simple_bus(sysfs_root, "spi", Bus::Spi, &mut devices)?;
     scan_simple_bus(sysfs_root, "serio", Bus::Serio, &mut devices)?;
     scan_simple_bus(sysfs_root, "hid", Bus::Hid, &mut devices)?;
+    // Modern laptops and servers expose important functions outside the
+    // original PCI/USB/I2C set: SD/MMC storage, NVMe/SCSI, USB4/Thunderbolt,
+    // Type-C retimers, virtio guests, cellular MHI, SoundWire codecs, and
+    // auxiliary/RPMsg coprocessor devices.  They are physical package
+    // boundaries just like PCI and must not disappear from install planning.
+    for (name, bus) in [
+        ("auxiliary", Bus::Auxiliary),
+        ("firewire", Bus::Firewire),
+        ("i3c", Bus::I3c),
+        ("mdio_bus", Bus::Mdio),
+        ("mei", Bus::Mei),
+        ("mhi", Bus::Mhi),
+        ("mmc", Bus::Mmc),
+        ("nvme", Bus::Nvme),
+        ("rpmsg", Bus::Rpmsg),
+        ("scsi", Bus::Scsi),
+        ("sdio", Bus::Sdio),
+        ("soundwire", Bus::Soundwire),
+        ("thunderbolt", Bus::Thunderbolt),
+        ("typec", Bus::Typec),
+        ("virtio", Bus::Virtio),
+        ("vmbus", Bus::Vmbus),
+    ] {
+        scan_simple_bus(sysfs_root, name, bus, &mut devices)?;
+    }
     scan_class_devices(sysfs_root, &mut devices)?;
     devices.sort_by(|left, right| left.key.cmp(&right.key));
     devices.dedup_by(|left, right| left.key == right.key);
@@ -353,7 +378,15 @@ fn is_regular_non_symlink(path: &Path) -> bool {
 /// stable package boundary and include PCI, USB, I²C, ACPI, platform, SPI,
 /// serio, and HID functions.
 pub fn target_profile_required(device: &HardwareDevice) -> bool {
-    device.bus != Bus::Sysfs && !device_capabilities(device).is_empty()
+    device.bus != Bus::Sysfs
+        && (!device_capabilities(device).is_empty()
+            // A physical function with a modalias or a bound driver is still
+            // a package boundary even when its class is not in our fixed
+            // capability vocabulary.  Requiring a signed profile here keeps
+            // camera, modem, sensor, security, and vendor-coprocessor
+            // hardware from being silently omitted by Calamares.
+            || !device.modalias.is_empty()
+            || device.driver.is_some())
 }
 
 pub fn scan_system(sysfs_root: &Path) -> SystemFacts {
@@ -1668,6 +1701,74 @@ fn device_capabilities(device: &HardwareDevice) -> BTreeSet<HardwareCapability> 
         Bus::Serio | Bus::Hid => {
             result.insert(HardwareCapability::Input);
         }
+        Bus::Mmc | Bus::Sdio | Bus::Nvme | Bus::Scsi => {
+            result.insert(HardwareCapability::Storage);
+        }
+        Bus::Soundwire => {
+            result.insert(HardwareCapability::Audio);
+        }
+        Bus::Virtio | Bus::Vmbus | Bus::Mhi | Bus::Mdio | Bus::Firewire => {
+            let text = format!("{} {}", device.name, device.modalias).to_ascii_lowercase();
+            if ["net", "ether", "wifi", "wireless", "wlan", "wwan"]
+                .iter()
+                .any(|needle| text.contains(needle))
+            {
+                result.insert(HardwareCapability::Network);
+                if ["wifi", "wireless", "wlan", "wwan"]
+                    .iter()
+                    .any(|needle| text.contains(needle))
+                {
+                    result.insert(HardwareCapability::Wireless);
+                }
+            }
+            if ["sound", "audio", "codec", "hda", "sof"]
+                .iter()
+                .any(|needle| text.contains(needle))
+            {
+                result.insert(HardwareCapability::Audio);
+            }
+            if ["blk", "block", "storage", "nvme", "scsi"]
+                .iter()
+                .any(|needle| text.contains(needle))
+            {
+                result.insert(HardwareCapability::Storage);
+            }
+        }
+        Bus::Auxiliary | Bus::I3c | Bus::Mei | Bus::Rpmsg | Bus::Thunderbolt | Bus::Typec => {
+            let text = format!("{} {}", device.name, device.modalias).to_ascii_lowercase();
+            if [
+                "elan",
+                "synaptics",
+                "touch",
+                "keyboard",
+                "mouse",
+                "pointing",
+                "hid",
+            ]
+            .iter()
+            .any(|needle| text.contains(needle))
+            {
+                result.insert(HardwareCapability::Input);
+            }
+            if ["sound", "audio", "codec", "hda", "sof", "soundwire"]
+                .iter()
+                .any(|needle| text.contains(needle))
+            {
+                result.insert(HardwareCapability::Audio);
+            }
+            if ["wifi", "wireless", "wlan", "wwan", "bluetooth", "modem"]
+                .iter()
+                .any(|needle| text.contains(needle))
+            {
+                result.insert(HardwareCapability::Network);
+            }
+            if ["wifi", "wireless", "wlan", "wwan", "bluetooth"]
+                .iter()
+                .any(|needle| text.contains(needle))
+            {
+                result.insert(HardwareCapability::Wireless);
+            }
+        }
         Bus::Sysfs => {}
     }
     // USB Wi-Fi adapters often have bDeviceClass=0 and PCI devices can expose
@@ -2174,6 +2275,64 @@ mod tests {
             Some(&format!("iwlwifi={}", builtin.display()))
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extended_buses_cover_storage_audio_and_virtual_network_functions() {
+        let root = scratch();
+        let nvme = root.join("bus/nvme/devices/nvme0");
+        let soundwire = root.join("bus/soundwire/devices/sdw:0:0");
+        let virtio = root.join("bus/virtio/devices/virtio0");
+        for path in [&nvme, &soundwire, &virtio] {
+            fs::create_dir_all(path).unwrap();
+        }
+        fs::write(nvme.join("name"), "nvme controller\n").unwrap();
+        fs::write(nvme.join("modalias"), "nvme:nvme0\n").unwrap();
+        fs::write(soundwire.join("name"), "SoundWire codec\n").unwrap();
+        fs::write(soundwire.join("modalias"), "soundwire:codec\n").unwrap();
+        fs::write(virtio.join("name"), "virtio wifi net\n").unwrap();
+        fs::write(virtio.join("modalias"), "virtio:d00000001v00001\n").unwrap();
+
+        let inventory = scan_inventory(&root).unwrap();
+        let storage = inventory
+            .capabilities
+            .iter()
+            .find(|requirement| requirement.capability == HardwareCapability::Storage)
+            .unwrap();
+        assert_eq!(storage.device_keys, vec!["nvme:nvme0"]);
+        let audio = inventory
+            .capabilities
+            .iter()
+            .find(|requirement| requirement.capability == HardwareCapability::Audio)
+            .unwrap();
+        assert_eq!(audio.device_keys, vec!["soundwire:sdw:0:0"]);
+        let wireless = inventory
+            .capabilities
+            .iter()
+            .find(|requirement| requirement.capability == HardwareCapability::Wireless)
+            .unwrap();
+        assert_eq!(wireless.device_keys, vec!["virtio:virtio0"]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unknown_physical_modalias_cannot_skip_target_profile_gate() {
+        let device = HardwareDevice {
+            key: "auxiliary:vendor-camera".into(),
+            bus: Bus::Auxiliary,
+            sysfs_path: PathBuf::from("bus/auxiliary/devices/vendor-camera"),
+            name: "vendor camera".into(),
+            modalias: "auxiliary:vendor-camera".into(),
+            vendor: None,
+            product: None,
+            subsystem_vendor: None,
+            subsystem_product: None,
+            class: None,
+            revision: None,
+            driver: None,
+            properties: BTreeMap::new(),
+        };
+        assert!(target_profile_required(&device));
     }
 
     #[test]

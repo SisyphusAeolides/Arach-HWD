@@ -1,7 +1,9 @@
 # Arach HWD
 
 Arach HWD is the automatic hardware detection and provisioning planner for
-Arach OS. It scans PCI, USB, I2C, ACPI, platform, SPI, serio, HID, DMI, and Linux class devices without
+Arach OS. It scans PCI, USB, I2C, ACPI, platform, SPI, serio, HID, auxiliary,
+FireWire, I3C, MDIO, MEI, MHI, MMC/SDIO, NVMe, RPMsg, SCSI, SoundWire,
+Thunderbolt, Type-C, virtio, VMBus, DMI, and Linux class devices without
 modifying the machine. The inventory groups network, wireless, audio,
 graphics, storage, input, Bluetooth, and firmware capabilities and preserves
 the exact bus/modalias identity Corinth needs to find a signed driver or
@@ -20,7 +22,11 @@ during Calamares preflight. This is the complete metadata surface available
 from the supplied kernel and firmware trees; it does not pretend that a
 missing signed Arach profile or package artifact is installable. Candidates
 help maintainers close catalog gaps and remain advisory evidence until a
-signed profile and package intent authorize a transaction.
+signed profile and package intent authorize a transaction. Physical devices
+with an unfamiliar capability class still carry a modalias or bound-driver
+identity; Calamares therefore requires a signed target profile for them instead
+of silently treating an unclassified camera, modem, sensor, security device, or
+coprocessor as optional.
 
 Profiles cannot execute shell commands. Driver and firmware intents must use
 the signed Arach hardware repository, include artifact, metadata, and source
@@ -103,7 +109,9 @@ profile and an Arach Hardware repository package intent are still required
 before Corinth may activate a driver or firmware package. `plan` refuses to
 emit a partial package set when an unresolved device has no matching signed
 profile. Calamares additionally passes `--require-target-profiles`: this
-checks every physical PCI, USB, I2C, ACPI, platform, SPI, serio, and HID function that provides a
+checks every physical PCI, USB, I2C, ACPI, platform, SPI, serio, HID,
+auxiliary, FireWire, I3C, MDIO, MEI, MHI, MMC/SDIO, NVMe, RPMsg, SCSI,
+SoundWire, Thunderbolt, Type-C, virtio, or VMBus function that provides a
 hardware capability, even when the temporary live Linux kernel already has a
 driver bound. A live-kernel driver is not evidence that the newly installed
 Arach kernel contains the same driver. Linux class entries such as `wlan0`,

@@ -47,8 +47,12 @@ excluded from the unresolved set; their parent device is the package boundary.
 For an installation targeting Arach Kernel, Calamares invokes
 `arach-hwd plan --require-target-profiles`. That mode does not trust a driver
 bound by the temporary live Linux kernel: every physical PCI, USB, I²C, ACPI,
-platform, SPI, serio, or HID bus function with a hardware capability must
-resolve to a signed target profile and exact package intents. This prevents a live image from appearing complete while the target
+platform, SPI, serio, HID, auxiliary, FireWire, I3C, MDIO, MEI, MHI, MMC/SDIO,
+NVMe, RPMsg, SCSI, SoundWire, Thunderbolt, Type-C, virtio, or VMBus bus
+function with a hardware capability must resolve to a signed target profile
+and exact package intents. A physical function with a modalias or bound driver
+is also a profile boundary when its capability is not yet classified. This
+prevents a live image from appearing complete while the target
 kernel is missing its Wi-Fi, audio, graphics, storage, Bluetooth, input, or
 firmware support.
 
