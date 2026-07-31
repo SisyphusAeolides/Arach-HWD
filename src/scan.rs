@@ -166,9 +166,10 @@ fn driver_source_manifest(
         (DriverSourceKind::KernelMetadata, modules_builtin),
     ] {
         for path in paths {
-            let bytes = read_modules_metadata(path, MAX_MODULES_ALIAS_BYTES, "driver metadata")?;
+            let bytes =
+                read_modules_metadata_bytes(path, MAX_MODULES_ALIAS_BYTES, "driver metadata")?;
             let mut hasher = Sha256::new();
-            hasher.update(bytes.as_bytes());
+            hasher.update(&bytes);
             evidence.push(DriverSourceEvidence {
                 kind: kind.clone(),
                 path: path.clone(),
@@ -1370,6 +1371,11 @@ fn resolve_firmware_file(root: &Path, candidate: &Path) -> Option<PathBuf> {
 }
 
 fn read_modules_metadata(path: &Path, limit: u64, label: &str) -> io::Result<String> {
+    let bytes = read_modules_metadata_bytes(path, limit, label)?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+fn read_modules_metadata_bytes(path: &Path, limit: u64, label: &str) -> io::Result<Vec<u8>> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(io::Error::new(
@@ -1383,7 +1389,7 @@ fn read_modules_metadata(path: &Path, limit: u64, label: &str) -> io::Result<Str
             format!("{label} table exceeds {limit} bytes: {}", path.display()),
         ));
     }
-    fs::read_to_string(path)
+    fs::read(path)
 }
 
 fn parse_modules_alias(text: &str) -> Vec<LinuxAlias> {
