@@ -283,6 +283,9 @@ impl HardwareProfile {
                     .required_features
                     .windows(2)
                     .any(|pair| pair[0] >= pair[1])
+                || allowed
+                    .iter()
+                    .any(|feature| !compiler.architecture.supports(*feature))
                 || !required.is_subset(&allowed)
             {
                 return Err(ProfileError::InvalidCompilerPolicy);
@@ -818,6 +821,13 @@ mod tests {
             architecture: CpuArchitecture::X86_64,
             allowed_features: vec![CpuFeature::Sse2],
             required_features: vec![CpuFeature::Avx2],
+        });
+        assert_eq!(profile.validate(), Err(ProfileError::InvalidCompilerPolicy));
+
+        profile.compiler = Some(CompilerPolicy {
+            architecture: CpuArchitecture::Aarch64,
+            allowed_features: vec![CpuFeature::Avx2],
+            required_features: vec![],
         });
         assert_eq!(profile.validate(), Err(ProfileError::InvalidCompilerPolicy));
     }

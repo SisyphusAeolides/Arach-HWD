@@ -36,6 +36,48 @@ pub enum CpuArchitecture {
     Unknown,
 }
 
+impl CpuArchitecture {
+    pub const fn supports(self, feature: CpuFeature) -> bool {
+        match self {
+            Self::X86_64 => matches!(
+                feature,
+                CpuFeature::Aes
+                    | CpuFeature::Avx
+                    | CpuFeature::Avx2
+                    | CpuFeature::Avx512bw
+                    | CpuFeature::Avx512cd
+                    | CpuFeature::Avx512dq
+                    | CpuFeature::Avx512f
+                    | CpuFeature::Avx512vl
+                    | CpuFeature::Bmi1
+                    | CpuFeature::Bmi2
+                    | CpuFeature::Fma
+                    | CpuFeature::Fxsr
+                    | CpuFeature::Lzcnt
+                    | CpuFeature::Mmx
+                    | CpuFeature::Pclmulqdq
+                    | CpuFeature::Popcnt
+                    | CpuFeature::Sse
+                    | CpuFeature::Sse2
+                    | CpuFeature::Sse3
+                    | CpuFeature::Sse41
+                    | CpuFeature::Sse42
+                    | CpuFeature::Ssse3
+            ),
+            Self::Aarch64 => matches!(
+                feature,
+                CpuFeature::Aes
+                    | CpuFeature::Crc32
+                    | CpuFeature::Neon
+                    | CpuFeature::Sha2
+                    | CpuFeature::Sve
+                    | CpuFeature::Sve2
+            ),
+            Self::Riscv64 | Self::Unknown => false,
+        }
+    }
+}
+
 /// Compiler-relevant CPU capabilities admitted across the HWD/Corinth
 /// boundary. The closed vocabulary prevents observed hardware text or signed
 /// profile data from becoming arbitrary compiler command-line input.
