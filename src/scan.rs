@@ -1,5 +1,6 @@
 use crate::facts::{
-    Bus, CapabilityRequirement, HardwareCapability, HardwareDevice, Inventory, SystemFacts,
+    Bus, CapabilityRequirement, CpuArchitecture, CpuFacts, CpuFeature, HardwareCapability,
+    HardwareDevice, Inventory, SystemFacts,
 };
 use crate::sources::{DriverSourceEvidence, DriverSourceKind, DriverSourceManifest};
 use sha2::{Digest, Sha256};
@@ -8,7 +9,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-pub const INVENTORY_SCHEMA: u32 = 5;
+pub const INVENTORY_SCHEMA: u32 = 6;
 
 pub fn scan_inventory(sysfs_root: &Path) -> io::Result<Inventory> {
     scan_inventory_with_modules_metadata(sysfs_root, &[], &[])
@@ -417,6 +418,15 @@ pub fn target_profile_required(device: &HardwareDevice) -> bool {
 }
 
 pub fn scan_system(sysfs_root: &Path) -> SystemFacts {
+    let cpuinfo = if sysfs_root == Path::new("/sys") {
+        PathBuf::from("/proc/cpuinfo")
+    } else {
+        sysfs_root.join("cpuinfo")
+    };
+    scan_system_with_cpuinfo(sysfs_root, &cpuinfo)
+}
+
+pub fn scan_system_with_cpuinfo(sysfs_root: &Path, cpuinfo: &Path) -> SystemFacts {
     let dmi = sysfs_root.join("class/dmi/id");
     SystemFacts {
         dmi_vendor: read_trimmed(dmi.join("sys_vendor")),
@@ -424,7 +434,119 @@ pub fn scan_system(sysfs_root: &Path) -> SystemFacts {
         dmi_product_version: read_trimmed(dmi.join("product_version")),
         dmi_board: read_trimmed(dmi.join("board_name")),
         dmi_modalias: read_trimmed(dmi.join("modalias")),
+        cpu: fs::read_to_string(cpuinfo)
+            .map(|text| parse_cpu_facts(&text))
+            .unwrap_or_default(),
     }
+}
+
+fn parse_cpu_facts(text: &str) -> CpuFacts {
+    if text.trim().is_empty() {
+        return CpuFacts::default();
+    }
+    let first = text.split("\n\n").next().unwrap_or(text);
+    let fields = first
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .map(|(key, value)| (key.trim(), value.trim()))
+        .collect::<BTreeMap<_, _>>();
+    let architecture = if fields.contains_key("vendor_id") || fields.contains_key("cpu family") {
+        CpuArchitecture::X86_64
+    } else if fields.contains_key("CPU implementer") || fields.contains_key("CPU architecture") {
+        CpuArchitecture::Aarch64
+    } else if fields
+        .get("isa")
+        .is_some_and(|value| value.to_ascii_lowercase().starts_with("rv64"))
+    {
+        CpuArchitecture::Riscv64
+    } else {
+        match std::env::consts::ARCH {
+            "x86_64" => CpuArchitecture::X86_64,
+            "aarch64" => CpuArchitecture::Aarch64,
+            "riscv64" => CpuArchitecture::Riscv64,
+            _ => CpuArchitecture::Unknown,
+        }
+    };
+    let feature_text = fields
+        .get("flags")
+        .or_else(|| fields.get("Features"))
+        .copied()
+        .unwrap_or_default();
+    let features = feature_text
+        .split_ascii_whitespace()
+        .filter_map(cpu_feature)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    CpuFacts {
+        architecture,
+        vendor: fields
+            .get("vendor_id")
+            .or_else(|| fields.get("CPU implementer"))
+            .copied()
+            .unwrap_or_default()
+            .to_owned(),
+        family: fields
+            .get("cpu family")
+            .and_then(|value| value.parse().ok())
+            .or_else(|| parse_cpu_number(fields.get("CPU architecture").copied())),
+        model: fields
+            .get("model")
+            .and_then(|value| value.parse().ok())
+            .or_else(|| parse_cpu_number(fields.get("CPU part").copied())),
+        stepping: fields
+            .get("stepping")
+            .and_then(|value| value.parse().ok())
+            .or_else(|| parse_cpu_number(fields.get("CPU revision").copied())),
+        model_name: fields
+            .get("model name")
+            .or_else(|| fields.get("Processor"))
+            .copied()
+            .unwrap_or_default()
+            .to_owned(),
+        features,
+    }
+}
+
+fn parse_cpu_number(value: Option<&str>) -> Option<u32> {
+    let value = value?;
+    value
+        .strip_prefix("0x")
+        .map(|hex| u32::from_str_radix(hex, 16).ok())
+        .unwrap_or_else(|| value.parse().ok())
+}
+
+fn cpu_feature(value: &str) -> Option<CpuFeature> {
+    Some(match value.to_ascii_lowercase().as_str() {
+        "aes" => CpuFeature::Aes,
+        "avx" => CpuFeature::Avx,
+        "avx2" => CpuFeature::Avx2,
+        "avx512bw" => CpuFeature::Avx512bw,
+        "avx512cd" => CpuFeature::Avx512cd,
+        "avx512dq" => CpuFeature::Avx512dq,
+        "avx512f" => CpuFeature::Avx512f,
+        "avx512vl" => CpuFeature::Avx512vl,
+        "bmi1" => CpuFeature::Bmi1,
+        "bmi2" => CpuFeature::Bmi2,
+        "crc32" => CpuFeature::Crc32,
+        "fma" => CpuFeature::Fma,
+        "fxsr" => CpuFeature::Fxsr,
+        "abm" | "lzcnt" => CpuFeature::Lzcnt,
+        "mmx" => CpuFeature::Mmx,
+        "asimd" | "neon" => CpuFeature::Neon,
+        "pclmulqdq" | "pclmuldq" => CpuFeature::Pclmulqdq,
+        "popcnt" => CpuFeature::Popcnt,
+        "sha2" => CpuFeature::Sha2,
+        "sse" => CpuFeature::Sse,
+        "sse2" => CpuFeature::Sse2,
+        "pni" | "sse3" => CpuFeature::Sse3,
+        "sse4_1" => CpuFeature::Sse41,
+        "sse4_2" => CpuFeature::Sse42,
+        "ssse3" => CpuFeature::Ssse3,
+        "sve" => CpuFeature::Sve,
+        "sve2" => CpuFeature::Sve2,
+        _ => return None,
+    })
 }
 
 fn scan_pci(root: &Path, output: &mut Vec<HardwareDevice>) -> io::Result<()> {
@@ -2020,6 +2142,28 @@ mod tests {
             Some("enabled=1 recoveries=2")
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cpuinfo_becomes_a_canonical_bounded_silicon_profile() {
+        let facts = parse_cpu_facts(
+            "processor : 0\nvendor_id : GenuineIntel\ncpu family : 6\nmodel : 85\nstepping : 7\nmodel name : Example CPU\nflags : fpu sse2 avx avx2 bmi1 bmi2 unknown_flag\n\nprocessor : 1\n",
+        );
+        assert_eq!(facts.architecture, CpuArchitecture::X86_64);
+        assert_eq!(facts.vendor, "GenuineIntel");
+        assert_eq!(facts.family, Some(6));
+        assert_eq!(facts.model, Some(85));
+        assert_eq!(facts.stepping, Some(7));
+        assert_eq!(
+            facts.features,
+            vec![
+                CpuFeature::Avx,
+                CpuFeature::Avx2,
+                CpuFeature::Bmi1,
+                CpuFeature::Bmi2,
+                CpuFeature::Sse2,
+            ]
+        );
     }
 
     #[test]

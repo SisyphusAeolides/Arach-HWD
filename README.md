@@ -5,7 +5,9 @@ Arach OS. It inventories hardware without modifying the machine, combines live
 and target-kernel evidence, verifies signed hardware profiles, and emits the
 exact package plan Corinth may execute.
 
-It scans PCI, USB, I2C, ACPI, platform, SPI, serio, HID, auxiliary, FireWire,
+It scans the CPU architecture, vendor, family, model, stepping, and a closed
+compiler-feature vocabulary before it scans PCI, USB, I2C, ACPI, platform,
+SPI, serio, HID, auxiliary, FireWire,
 I3C, MDIO, MEI, MHI, MMC/SDIO, NVMe, RPMsg, SCSI, SoundWire, Thunderbolt,
 Type-C, virtio, VMBus, DMI, and Linux class devices. The inventory groups
 network, wireless, audio, graphics, storage, input, Bluetooth, firmware, and
@@ -18,8 +20,8 @@ unless the caller explicitly requests an inventory-only report.
 
 ## Current Arach OS integration
 
-The current Arach OS component lock pins Arach-HWD
-`569c40a530fb8e5fe9fc618b97c7ae4a5795f634`.
+The Arach OS component lock is the authority for the exact Arach-HWD revision
+used by a release.
 
 The live-root contract requires `/system/arach-hwd` and the signed
 `arach-hardware-catalog` under `/etc/arach/hwd`. The catalog lock must enumerate
@@ -74,6 +76,14 @@ Profiles cannot execute shell commands. Driver and firmware intents must:
 - define typed health checks;
 - carry explicit rollback policy.
 
+Profiles may also authorize hardware-specific compilation. That policy names
+one CPU architecture and sorted, closed sets of allowed and required CPU
+features. HWD rejects a missing required feature and emits only the
+intersection of observed and allowed features. Raw compiler flags, CPU model
+names, and vendor strings never cross this boundary as executable input. A
+profile without compiler policy produces a portable target with no optional
+features.
+
 Statistical ranking may order already eligible profiles but cannot create a
 hardware match or grant authority. Equal priority and rank evidence is an
 explicit ambiguity and produces no provisioning plan.
@@ -107,7 +117,8 @@ arach-hwd preflight [--sysfs /sys] [--modules-alias FILE]... [--modules-firmware
 arach-hwd plan --profiles DIR --keyring FILE --catalog-lock FILE --driver-abi 1.0 [--sysfs /sys] [--modules-alias FILE]... [--modules-firmware FILE]... [--modules-dep FILE]... [--modules-builtin FILE]... [--firmware-root DIR]... [--output FILE] [--require-target-profiles]
 ```
 
-`scan` emits inventory schema 5 and `preflight` emits report schema 6. When
+`scan` emits inventory schema 6, `preflight` emits report schema 7, and `plan`
+emits schema 2. When
 metadata options are omitted, the CLI discovers regular, non-symlink metadata
 tables under conventional live, target, offline-cache, and staged installer
 roots. It includes `modules.builtin.modinfo` automatically when present.

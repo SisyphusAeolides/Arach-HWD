@@ -12,10 +12,11 @@ pub mod signature;
 pub mod sources;
 
 pub use facts::{
-    Bus, CapabilityRequirement, HardwareCapability, HardwareDevice, Inventory, SystemFacts,
+    Bus, CapabilityRequirement, CpuArchitecture, CpuFacts, CpuFeature, HardwareCapability,
+    HardwareDevice, Inventory, SystemFacts,
 };
 pub use health::{HealthEvidence, RecoveryDisposition, assess_recovery};
-pub use plan::{ProvisionPlan, build_plan};
+pub use plan::{CompilerTarget, ProvisionPlan, build_plan};
 pub use preflight::{PREFLIGHT_SCHEMA, PreflightReport, UnresolvedDevice, preflight_inventory};
 pub use profile::{HardwareProfile, ResolveError, VerifiedProfile, resolve};
 pub use repository::{

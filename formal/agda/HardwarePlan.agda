@@ -15,6 +15,21 @@ data Repository : Set where
 data Scope : Set where
   system driver firmware : Scope
 
+data CompilerFeature : Set where
+  sse2 avx2 neon : CompilerFeature
+
+data Observed : CompilerFeature → Set where
+  observed-sse2 : Observed sse2
+  observed-avx2 : Observed avx2
+
+data Allowed : CompilerFeature → Set where
+  allowed-sse2 : Allowed sse2
+  allowed-avx2 : Allowed avx2
+
+data SelectedFeature : CompilerFeature → Set where
+  bounded-feature : {feature : CompilerFeature} →
+                    Observed feature → Allowed feature → SelectedFeature feature
+
 record Profile : Set where
   constructor profile
   field
@@ -42,6 +57,9 @@ driver-cannot-use-git ()
 
 driver-cannot-use-crates : Authority driver crates → ⊥
 driver-cannot-use-crates ()
+
+unobserved-feature-cannot-cross : SelectedFeature neon → ⊥
+unobserved-feature-cannot-cross (bounded-feature () allowed)
 
 signed-match-unique : (proof : Eligible (profile signed matched)) →
                       proof ≡ hard-match

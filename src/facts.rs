@@ -10,6 +10,65 @@ pub struct SystemFacts {
     pub dmi_product_version: String,
     pub dmi_board: String,
     pub dmi_modalias: String,
+    #[serde(default)]
+    pub cpu: CpuFacts,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CpuFacts {
+    pub architecture: CpuArchitecture,
+    pub vendor: String,
+    pub family: Option<u32>,
+    pub model: Option<u32>,
+    pub stepping: Option<u32>,
+    pub model_name: String,
+    pub features: Vec<CpuFeature>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CpuArchitecture {
+    X86_64,
+    Aarch64,
+    Riscv64,
+    #[default]
+    Unknown,
+}
+
+/// Compiler-relevant CPU capabilities admitted across the HWD/Corinth
+/// boundary. The closed vocabulary prevents observed hardware text or signed
+/// profile data from becoming arbitrary compiler command-line input.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CpuFeature {
+    Aes,
+    Avx,
+    Avx2,
+    Avx512bw,
+    Avx512cd,
+    Avx512dq,
+    Avx512f,
+    Avx512vl,
+    Bmi1,
+    Bmi2,
+    Crc32,
+    Fma,
+    Fxsr,
+    Lzcnt,
+    Mmx,
+    Neon,
+    Pclmulqdq,
+    Popcnt,
+    Sha2,
+    Sse,
+    Sse2,
+    Sse3,
+    Sse41,
+    Sse42,
+    Ssse3,
+    Sve,
+    Sve2,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]

@@ -14,6 +14,8 @@ A profile contains:
 - typed post-activation health checks with no shell commands;
 - an exact package removal set and previous-driver restoration policy;
 - optional bounded recovery, cooldown, and quarantine intervals;
+- optional compiler policy containing one CPU architecture, a sorted allowed
+  feature set, and a sorted required subset;
 - explicit conflicts with other profiles.
 
 Every Match table must contain evidence. Matching can use bus, vendor, product,
@@ -27,6 +29,14 @@ chooses an identity winner.
 
 System packages must come from arach-native. Driver and firmware packages must
 come from arach-hardware. A valid signature does not relax that rule.
+
+Compiler policy is capability data, never command text. HWD rejects unknown
+architectures, empty or duplicate allowed sets, non-canonical ordering, and
+required features outside the allowed set. Plan generation rejects an
+architecture mismatch or a required feature absent from the observed CPU. The
+target feature list is the ordered intersection of the signed allowed set and
+the observed feature set. Without compiler policy, HWD emits no optional CPU
+features.
 
 Each profile file NAME.toml requires NAME.toml.sig:
 

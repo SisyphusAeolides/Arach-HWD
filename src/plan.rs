@@ -1,13 +1,14 @@
-use crate::facts::HardwareDevice;
+use crate::facts::{CpuArchitecture, CpuFeature, HardwareDevice, SystemFacts};
 use crate::profile::{
-    AbiVersion, HealthCheck, PackageAction, PackageScope, RecoveryPolicy, RepositoryAuthority,
-    RollbackPolicy, VerifiedProfile,
+    AbiVersion, CompilerPolicy, HealthCheck, PackageAction, PackageScope, RecoveryPolicy,
+    RepositoryAuthority, RollbackPolicy, VerifiedProfile,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::fmt;
 use std::str::FromStr;
 
-pub const PLAN_SCHEMA: u32 = 1;
+pub const PLAN_SCHEMA: u32 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -18,10 +19,22 @@ pub struct ProvisionPlan {
     pub signing_key_id: String,
     pub device_key: String,
     pub driver_abi: String,
+    pub compiler: CompilerTarget,
     pub package: Vec<CorinthIntent>,
     pub health: Vec<HealthCheck>,
     pub rollback: RollbackPolicy,
     pub recovery: Option<RecoveryPolicy>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompilerTarget {
+    pub architecture: CpuArchitecture,
+    pub vendor: String,
+    pub family: Option<u32>,
+    pub model: Option<u32>,
+    pub stepping: Option<u32>,
+    pub features: Vec<CpuFeature>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -59,6 +72,11 @@ pub enum PlanError {
         minimum: String,
         maximum: String,
     },
+    CompilerArchitectureUnsupported {
+        observed: CpuArchitecture,
+        required: CpuArchitecture,
+    },
+    CompilerFeaturesMissing(Vec<CpuFeature>),
 }
 
 impl fmt::Display for PlanError {
@@ -71,6 +89,7 @@ impl std::error::Error for PlanError {}
 
 pub fn build_plan(
     verified: &VerifiedProfile,
+    system: &SystemFacts,
     device: &HardwareDevice,
     running_driver_abi: &str,
 ) -> Result<ProvisionPlan, PlanError> {
@@ -116,6 +135,7 @@ pub fn build_plan(
             source_lock_sha256: intent.source_lock_sha256.clone(),
         })
         .collect();
+    let compiler = build_compiler_target(verified.profile.compiler.as_ref(), system)?;
     Ok(ProvisionPlan {
         schema: PLAN_SCHEMA,
         profile_id: verified.profile.profile.id.clone(),
@@ -123,10 +143,51 @@ pub fn build_plan(
         signing_key_id: verified.key_id.clone(),
         device_key: device.key.clone(),
         driver_abi: running_driver_abi.to_owned(),
+        compiler,
         package,
         health: verified.profile.health.clone(),
         rollback: verified.profile.rollback.clone(),
         recovery: verified.profile.recovery,
+    })
+}
+
+fn build_compiler_target(
+    policy: Option<&CompilerPolicy>,
+    system: &SystemFacts,
+) -> Result<CompilerTarget, PlanError> {
+    let observed = system.cpu.features.iter().copied().collect::<BTreeSet<_>>();
+    let features = if let Some(policy) = policy {
+        if system.cpu.architecture != policy.architecture {
+            return Err(PlanError::CompilerArchitectureUnsupported {
+                observed: system.cpu.architecture,
+                required: policy.architecture,
+            });
+        }
+        let required = policy
+            .required_features
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let missing = required.difference(&observed).copied().collect::<Vec<_>>();
+        if !missing.is_empty() {
+            return Err(PlanError::CompilerFeaturesMissing(missing));
+        }
+        policy
+            .allowed_features
+            .iter()
+            .copied()
+            .filter(|feature| observed.contains(feature))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    Ok(CompilerTarget {
+        architecture: system.cpu.architecture,
+        vendor: system.cpu.vendor.clone(),
+        family: system.cpu.family,
+        model: system.cpu.model,
+        stepping: system.cpu.stepping,
+        features,
     })
 }
 
@@ -168,7 +229,16 @@ mod tests {
                 minimum: "1.0".into(),
                 maximum: "1.2".into(),
             }),
-            health: vec![],
+            compiler: Some(CompilerPolicy {
+                architecture: CpuArchitecture::X86_64,
+                allowed_features: vec![CpuFeature::Avx2, CpuFeature::Sse2],
+                required_features: vec![CpuFeature::Sse2],
+            }),
+            health: vec![HealthCheck {
+                kind: crate::profile::HealthCheckKind::DriverBound,
+                value: Some("test_driver".into()),
+                required: true,
+            }],
             rollback: RollbackPolicy {
                 remove_packages: vec!["test-driver".into()],
                 restore_previous_driver: true,
@@ -200,14 +270,34 @@ mod tests {
         (verified, device)
     }
 
+    fn system() -> SystemFacts {
+        SystemFacts {
+            cpu: crate::facts::CpuFacts {
+                architecture: CpuArchitecture::X86_64,
+                vendor: "GenuineIntel".into(),
+                family: Some(6),
+                model: Some(85),
+                stepping: Some(7),
+                model_name: "Example".into(),
+                features: vec![CpuFeature::Sse2, CpuFeature::Avx, CpuFeature::Avx2],
+            },
+            ..SystemFacts::default()
+        }
+    }
+
     #[test]
     fn exact_package_digests_cross_the_corinth_boundary() {
         let (profile, device) = fixture();
-        let plan = build_plan(&profile, &device, "1.1").unwrap();
+        assert_eq!(profile.profile.validate(), Ok(()));
+        let plan = build_plan(&profile, &system(), &device, "1.1").unwrap();
         assert_eq!(plan.package[0].artifact_sha256, "b".repeat(64));
         assert_eq!(
             plan.package[0].repository,
             RepositoryAuthority::ArachHardware
+        );
+        assert_eq!(
+            plan.compiler.features,
+            vec![CpuFeature::Avx2, CpuFeature::Sse2]
         );
     }
 
@@ -215,8 +305,19 @@ mod tests {
     fn incompatible_driver_abi_blocks_the_plan() {
         let (profile, device) = fixture();
         assert!(matches!(
-            build_plan(&profile, &device, "2.0"),
+            build_plan(&profile, &system(), &device, "2.0"),
             Err(PlanError::DriverAbiUnsupported { .. })
         ));
+    }
+
+    #[test]
+    fn missing_required_cpu_feature_blocks_the_plan() {
+        let (profile, device) = fixture();
+        let mut system = system();
+        system.cpu.features.clear();
+        assert_eq!(
+            build_plan(&profile, &system, &device, "1.1"),
+            Err(PlanError::CompilerFeaturesMissing(vec![CpuFeature::Sse2]))
+        );
     }
 }

@@ -1,7 +1,7 @@
 # Corinth provisioning boundary
 
-Arach HWD emits inventory schema 5, preflight report schema 6, and plan schema
-1. The Calamares medium must carry a signed profile catalog, its scoped
+Arach HWD emits inventory schema 6, preflight report schema 7, and plan schema
+2. The Calamares medium must carry a signed profile catalog, its scoped
 keyring, a catalog lock marker, and the running Driver ABI. An inventory or
 preflight report is discovery evidence only; a plan is immutable input to
 Corinth and is not itself proof that a package was installed.
@@ -70,6 +70,8 @@ Each plan binds:
 - the Ed25519 hardware-profile signing key ID;
 - the stable scanned device key;
 - the running Arach Driver ABI;
+- the observed CPU identity and the canonical intersection of observed CPU
+  features with the signed profile's closed compiler policy;
 - exact install-only package names and versions;
 - package scope and required repository authority;
 - metadata, artifact, and source-lock SHA-256 values;
@@ -82,6 +84,9 @@ activate the driver only after durable storage succeeds, run required health
 checks, and commit the generation atomically. Any failure before commit invokes
 the plan rollback and preserves the previous package generation.
 
-Arach HWD never emits a shell command, repository URL, local path, or mutable
-version selector. The package repository name is a closed enum. This keeps
-hardware detection from becoming a package-signature bypass.
+Arach HWD never emits a shell command, repository URL, local path, mutable
+version selector, or raw compiler flag. Package repositories, CPU
+architectures, and compiler features are closed enums. Corinth must reproduce
+the profile-bound limits before translating a target into compiler-specific
+environment variables. This keeps hardware detection from becoming a package
+signature or command-injection bypass.

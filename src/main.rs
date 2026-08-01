@@ -191,7 +191,7 @@ fn plan_command(arguments: &[String]) -> Result<(), String> {
             resolve(&inventory.system, device, &profiles).map_err(|error| error.to_string())?
         {
             plans.push(
-                arach_hwd::build_plan(profile, device, &driver_abi)
+                arach_hwd::build_plan(profile, &inventory.system, device, &driver_abi)
                     .map_err(|error| error.to_string())?,
             );
         }

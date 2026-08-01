@@ -38,6 +38,23 @@ public export
 data AbiCompatible = Compatible
 
 public export
+data CompilerFeature = Sse2 | Avx2 | Neon
+
+public export
+data Observed : CompilerFeature -> Type where
+  ObservedSse2 : Observed Sse2
+  ObservedAvx2 : Observed Avx2
+
+public export
+data Allowed : CompilerFeature -> Type where
+  AllowedSse2 : Allowed Sse2
+  AllowedAvx2 : Allowed Avx2
+
+public export
+data SelectedFeature : CompilerFeature -> Type where
+  BoundedFeature : Observed feature -> Allowed feature -> SelectedFeature feature
+
+public export
 record Plan where
   constructor MkPlan
   profile : Profile
@@ -58,6 +75,10 @@ driverCannotUseGit value impossible
 public export
 driverCannotUseCrates : Authority Driver Crates -> Void
 driverCannotUseCrates value impossible
+
+public export
+unobservedFeatureCannotCross : SelectedFeature Neon -> Void
+unobservedFeatureCannotCross (BoundedFeature observed allowed) impossible
 
 public export
 data Selection = NoProfile | Selected Profile | Ambiguous Nat Nat

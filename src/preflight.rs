@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Version of the installer-facing capability report.
-pub const PREFLIGHT_SCHEMA: u32 = 6;
+pub const PREFLIGHT_SCHEMA: u32 = 7;
 
 /// A device without a bound kernel driver.  The modalias and identity fields
 /// are the exact lookup key for Corinth's signed `arach-hardware` index.

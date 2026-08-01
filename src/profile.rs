@@ -1,4 +1,4 @@
-use crate::facts::{Bus, HardwareDevice, SystemFacts};
+use crate::facts::{Bus, CpuArchitecture, CpuFeature, HardwareDevice, SystemFacts};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
@@ -16,6 +16,8 @@ pub struct HardwareProfile {
     #[serde(default)]
     pub package: Vec<PackageIntent>,
     pub driver_abi: Option<DriverAbiRange>,
+    #[serde(default)]
+    pub compiler: Option<CompilerPolicy>,
     #[serde(default)]
     pub health: Vec<HealthCheck>,
     pub rollback: RollbackPolicy,
@@ -95,6 +97,15 @@ pub struct DriverAbiRange {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct CompilerPolicy {
+    pub architecture: CpuArchitecture,
+    pub allowed_features: Vec<CpuFeature>,
+    #[serde(default)]
+    pub required_features: Vec<CpuFeature>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HealthCheck {
     pub kind: HealthCheckKind,
     pub value: Option<String>,
@@ -150,6 +161,7 @@ pub enum ProfileError {
     InvalidAuthority(String),
     DriverAbiRequired,
     InvalidDriverAbi,
+    InvalidCompilerPolicy,
     HealthChecksRequired,
     InvalidHealthCheck(usize),
     InvalidRollback,
@@ -246,6 +258,34 @@ impl HardwareProfile {
             let maximum = abi.maximum.parse::<AbiVersion>();
             if !matches!((minimum, maximum), (Ok(minimum), Ok(maximum)) if minimum <= maximum) {
                 return Err(ProfileError::InvalidDriverAbi);
+            }
+        }
+        if let Some(compiler) = &self.compiler {
+            let allowed = compiler
+                .allowed_features
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>();
+            let required = compiler
+                .required_features
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>();
+            if compiler.architecture == CpuArchitecture::Unknown
+                || allowed.is_empty()
+                || allowed.len() != compiler.allowed_features.len()
+                || required.len() != compiler.required_features.len()
+                || compiler
+                    .allowed_features
+                    .windows(2)
+                    .any(|pair| pair[0] >= pair[1])
+                || compiler
+                    .required_features
+                    .windows(2)
+                    .any(|pair| pair[0] >= pair[1])
+                || !required.is_subset(&allowed)
+            {
+                return Err(ProfileError::InvalidCompilerPolicy);
             }
         }
         if has_hardware_package && self.health.is_empty() {
@@ -616,6 +656,7 @@ mod tests {
                     minimum: "1.0".into(),
                     maximum: "1.1".into(),
                 }),
+                compiler: None,
                 health: vec![HealthCheck {
                     kind: HealthCheckKind::DriverBound,
                     value: Some("example_driver".into()),
@@ -753,5 +794,31 @@ mod tests {
         profile.match_rules[0].driver = Some("example_driver".into());
         device.driver = Some("example_driver".into());
         assert_eq!(advisory_rank(&profile, &device), 9.0);
+    }
+
+    #[test]
+    fn compiler_policy_is_a_sorted_closed_capability_set() {
+        let mut profile = profile(
+            "compiler-policy",
+            10,
+            MatchRule {
+                bus: Some(Bus::Usb),
+                ..MatchRule::default()
+            },
+        )
+        .profile;
+        profile.compiler = Some(CompilerPolicy {
+            architecture: CpuArchitecture::X86_64,
+            allowed_features: vec![CpuFeature::Sse2, CpuFeature::Avx2],
+            required_features: vec![CpuFeature::Sse2],
+        });
+        assert_eq!(profile.validate(), Err(ProfileError::InvalidCompilerPolicy));
+
+        profile.compiler = Some(CompilerPolicy {
+            architecture: CpuArchitecture::X86_64,
+            allowed_features: vec![CpuFeature::Sse2],
+            required_features: vec![CpuFeature::Avx2],
+        });
+        assert_eq!(profile.validate(), Err(ProfileError::InvalidCompilerPolicy));
     }
 }
