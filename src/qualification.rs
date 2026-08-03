@@ -76,9 +76,13 @@ impl fmt::Display for QualificationError {
             Self::InvalidRevision => formatter.write_str("invalid hardware qualification revision"),
             Self::InvalidDigest => formatter.write_str("invalid hardware qualification digest"),
             Self::InvalidEvidencePath => formatter.write_str("invalid hardware evidence path"),
-            Self::DuplicateEvidence(kind) => write!(formatter, "duplicate hardware evidence: {kind:?}"),
+            Self::DuplicateEvidence(kind) => {
+                write!(formatter, "duplicate hardware evidence: {kind:?}")
+            }
             Self::MissingEvidence(kind) => write!(formatter, "missing hardware evidence: {kind:?}"),
-            Self::UnresolvedDevices => formatter.write_str("support level does not permit unresolved devices"),
+            Self::UnresolvedDevices => {
+                formatter.write_str("support level does not permit unresolved devices")
+            }
             Self::InsufficientSoak { required, actual } => write!(
                 formatter,
                 "insufficient hardware soak time: required {required} seconds, observed {actual} seconds"
@@ -177,9 +181,9 @@ impl QualificationRecord {
 fn valid_identity(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b' ' | b'-' | b'_' | b'.' | b':'))
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b' ' | b'-' | b'_' | b'.' | b':')
+        })
 }
 
 fn valid_architecture(value: &str) -> bool {
@@ -202,7 +206,11 @@ fn valid_digest(value: &str) -> bool {
 
 fn safe_relative(value: &str) -> bool {
     let path = Path::new(value);
-    !value.is_empty() && !path.is_absolute() && !path.components().any(|part| matches!(part, std::path::Component::ParentDir))
+    !value.is_empty()
+        && !path.is_absolute()
+        && !path
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
 }
 
 #[cfg(test)]
@@ -316,6 +324,9 @@ mod tests {
         let mut item = evidence(EvidenceKind::Boot, 0);
         item.artifact = "../boot.log".into();
         value.evidence.push(item);
-        assert_eq!(value.validate(), Err(QualificationError::InvalidEvidencePath));
+        assert_eq!(
+            value.validate(),
+            Err(QualificationError::InvalidEvidencePath)
+        );
     }
 }

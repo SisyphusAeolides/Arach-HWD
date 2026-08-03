@@ -63,10 +63,7 @@ fn qualify(path: &Path) -> Result<QualificationRecord, String> {
         let bytes = fs::read(&canonical).map_err(|error| error.to_string())?;
         let actual = format!("{:x}", Sha256::digest(&bytes));
         if actual != evidence.sha256 {
-            return Err(format!(
-                "evidence digest mismatch: {}",
-                evidence.artifact
-            ));
+            return Err(format!("evidence digest mismatch: {}", evidence.artifact));
         }
     }
     Ok(record)
@@ -83,7 +80,7 @@ const fn level_name(level: SupportLevel) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arach_hwd::{EvidenceKind, QualificationEvidence, QUALIFICATION_SCHEMA};
+    use arach_hwd::{EvidenceKind, QUALIFICATION_SCHEMA, QualificationEvidence};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temporary_root(name: &str) -> PathBuf {
