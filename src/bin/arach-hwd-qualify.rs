@@ -43,7 +43,8 @@ fn qualify(path: &Path) -> Result<QualificationRecord, String> {
     let text = fs::read_to_string(path).map_err(|error| error.to_string())?;
     let record: QualificationRecord = toml::from_str(&text).map_err(|error| error.to_string())?;
     record.validate().map_err(|error| error.to_string())?;
-    let root = path.parent().unwrap_or_else(|| Path::new("."));
+    let root = fs::canonicalize(path.parent().unwrap_or_else(|| Path::new(".")))
+        .map_err(|error| error.to_string())?;
     for evidence in &record.evidence {
         let artifact = root.join(&evidence.artifact);
         if artifact.is_symlink() || !artifact.is_file() {
@@ -52,7 +53,14 @@ fn qualify(path: &Path) -> Result<QualificationRecord, String> {
                 evidence.artifact
             ));
         }
-        let bytes = fs::read(&artifact).map_err(|error| error.to_string())?;
+        let canonical = fs::canonicalize(&artifact).map_err(|error| error.to_string())?;
+        if canonical != artifact || !canonical.starts_with(&root) {
+            return Err(format!(
+                "evidence traverses a symlink or escapes the qualification root: {}",
+                evidence.artifact
+            ));
+        }
+        let bytes = fs::read(&canonical).map_err(|error| error.to_string())?;
         let actual = format!("{:x}", Sha256::digest(&bytes));
         if actual != evidence.sha256 {
             return Err(format!(
@@ -134,5 +142,23 @@ mod tests {
         let path = write_record(&root, "0".repeat(64));
         assert!(qualify(&path).unwrap_err().contains("digest mismatch"));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlinked_evidence_parent() {
+        use std::os::unix::fs::symlink;
+
+        let root = temporary_root("symlink-root");
+        let outside = temporary_root("symlink-outside");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let bytes = b"outside evidence\n";
+        fs::write(outside.join("boot.log"), bytes).unwrap();
+        symlink(&outside, root.join("evidence")).unwrap();
+        let path = write_record(&root, format!("{:x}", Sha256::digest(bytes)));
+        assert!(qualify(&path).unwrap_err().contains("symlink"));
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(outside).unwrap();
     }
 }
