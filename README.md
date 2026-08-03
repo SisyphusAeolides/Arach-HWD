@@ -34,6 +34,14 @@ installer handoff. It does not claim universal hardware support. A device is
 installable only when an exact signed profile, compatible Driver ABI, package
 intent, payload, health policy, and rollback policy all agree.
 
+## Qualification evidence
+
+`arach-hwd-qualify` verifies retained per-machine qualification records before
+a system can claim an Experimental, Compatible, or Certified support level.
+Records bind the kernel and HWD revisions, catalog digest, unresolved-device
+counts, and SHA-256-verified lifecycle evidence. Placeholder revisions and
+digests are rejected; real hardware evidence is required for promotion.
+
 ## Linux driver and firmware evidence
 
 When available, HWD consumes five Linux metadata tables:
