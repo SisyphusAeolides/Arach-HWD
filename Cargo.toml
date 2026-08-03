@@ -30,5 +30,9 @@ path = "src/main.rs"
 name = "arach-hwd-catalog-sync"
 path = "src/bin/arach-hwd-catalog-sync.rs"
 
+[[bin]]
+name = "arach-hwd-record"
+path = "src/bin/arach-hwd-record.rs"
+
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

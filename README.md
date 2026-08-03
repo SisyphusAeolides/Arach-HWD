@@ -42,6 +42,18 @@ Records bind the kernel and HWD revisions, catalog digest, unresolved-device
 counts, and SHA-256-verified lifecycle evidence. Placeholder revisions and
 digests are rejected; real hardware evidence is required for promotion.
 
+`arach-hwd-record` creates a new qualification record from retained lifecycle
+artifacts without overwriting an existing record. The record is then checked by
+`arach-hwd-qualify` before publication. This keeps evidence capture separate
+from support-level promotion.
+
+```text
+arach-hwd-record --output QUALIFICATION.toml --system-id ID --vendor VENDOR \
+  --model MODEL --architecture x86-64 --level compatible --kernel-revision SHA \
+  --hwd-revision SHA --catalog-sha256 SHA --unresolved-devices 0 \
+  --critical-unresolved-devices 0 --evidence boot evidence/boot.log 0
+```
+
 ## Linux driver and firmware evidence
 
 When available, HWD consumes five Linux metadata tables:
