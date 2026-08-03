@@ -1,0 +1,39 @@
+name: Hardware qualification
+
+on:
+  push:
+    paths:
+      - src/qualification.rs
+      - src/bin/arach-hwd-qualify.rs
+      - src/lib.rs
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/hardware-qualification.yml
+  pull_request:
+    paths:
+      - src/qualification.rs
+      - src/bin/arach-hwd-qualify.rs
+      - src/lib.rs
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/hardware-qualification.yml
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - name: Test qualification policy and retained artifacts
+        run: cargo test --locked qualification arach-hwd-qualify
+      - name: Check qualification CLI
+        run: cargo check --locked --bin arach-hwd-qualify
+      - name: Lint qualification paths
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Check formatting
+        run: cargo fmt --all -- --check
