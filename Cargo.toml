@@ -5,7 +5,7 @@ edition = "2024"
 license = "MIT"
 rust-version = "1.85"
 repository = "https://github.com/SisyphusAeolides/Arach-HWD"
-description = "Signed hardware profile resolver and Corinth transaction planner for Arach OS"
+description = "Signed hardware profile resolver and Corinth transaction planner for ArachOS"
 build = "build.rs"
 default-run = "arach-hwd"
 

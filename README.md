@@ -1,7 +1,7 @@
 # Arach HWD
 
 Arach HWD is the automatic hardware detection and provisioning planner for
-Arach OS. It inventories hardware without modifying the machine, combines live
+ArachOS. It inventories hardware without modifying the machine, combines live
 and target-kernel evidence, verifies signed hardware profiles, and emits the
 exact package plan Corinth may execute.
 
@@ -18,15 +18,15 @@ HWD never invents a package name from a class or interface. Unresolved hardware
 is emitted as a deterministic repository query and is a hard preflight failure
 unless the caller explicitly requests an inventory-only report.
 
-## Current Arach OS integration
+## Current ArachOS integration
 
-The Arach OS component lock is the authority for the exact Arach-HWD revision
+The ArachOS component lock is the authority for the exact Arach-HWD revision
 used by a release.
 
 The live-root contract requires `/system/arach-hwd` and the signed
 `arach-hardware-catalog` under `/etc/arach/hwd`. The catalog lock must enumerate
 and hash every profile, detached signature, package index, keyring input, and
-the complete target-kernel evidence snapshot. Arach-Packages and Arach OS both
+the complete target-kernel evidence snapshot. Arach-Packages and ArachOS both
 validate these declared paths before the installer image is published.
 
 This qualifies the planner, catalog format, target-aware evidence, and
