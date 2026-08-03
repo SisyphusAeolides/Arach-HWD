@@ -195,6 +195,7 @@ fn valid_revision(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        && has_distinct_bytes(value)
 }
 
 fn valid_digest(value: &str) -> bool {
@@ -202,6 +203,15 @@ fn valid_digest(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        && has_distinct_bytes(value)
+}
+
+fn has_distinct_bytes(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    match bytes.next() {
+        Some(first) => bytes.any(|byte| byte != first),
+        None => false,
+    }
 }
 
 fn safe_relative(value: &str) -> bool {
@@ -218,11 +228,11 @@ mod tests {
     use super::*;
 
     fn digest() -> String {
-        "a".repeat(64)
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into()
     }
 
     fn revision() -> String {
-        "b".repeat(40)
+        "0123456789abcdef0123456789abcdef01234567".into()
     }
 
     fn evidence(kind: EvidenceKind, duration_seconds: u64) -> QualificationEvidence {
@@ -250,6 +260,17 @@ mod tests {
             critical_unresolved_devices: 0,
             evidence: Vec::new(),
         }
+    }
+
+    #[test]
+    fn placeholder_provenance_is_rejected() {
+        let mut value = record(SupportLevel::Experimental);
+        value.kernel_revision = "a".repeat(40);
+        assert_eq!(value.validate(), Err(QualificationError::InvalidRevision));
+
+        value.kernel_revision = revision();
+        value.catalog_sha256 = "b".repeat(64);
+        assert_eq!(value.validate(), Err(QualificationError::InvalidDigest));
     }
 
     #[test]

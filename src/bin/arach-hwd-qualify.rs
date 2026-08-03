@@ -102,9 +102,10 @@ mod tests {
             model: "Machine".into(),
             architecture: "x86-64".into(),
             level: SupportLevel::Experimental,
-            kernel_revision: "a".repeat(40),
-            hwd_revision: "b".repeat(40),
-            catalog_sha256: "c".repeat(64),
+            kernel_revision: "0123456789abcdef0123456789abcdef01234567".into(),
+            hwd_revision: "89abcdef0123456789abcdef0123456789abcdef".into(),
+            catalog_sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                .into(),
             unresolved_devices: 0,
             critical_unresolved_devices: 0,
             evidence: vec![QualificationEvidence {
@@ -136,7 +137,10 @@ mod tests {
         let root = temporary_root("changed");
         fs::create_dir_all(root.join("evidence")).unwrap();
         fs::write(root.join("evidence/boot.log"), b"changed\n").unwrap();
-        let path = write_record(&root, "0".repeat(64));
+        let path = write_record(
+            &root,
+            "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210".into(),
+        );
         assert!(qualify(&path).unwrap_err().contains("digest mismatch"));
         fs::remove_dir_all(root).unwrap();
     }
