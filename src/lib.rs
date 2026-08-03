@@ -6,6 +6,7 @@ pub mod health;
 pub mod plan;
 pub mod preflight;
 pub mod profile;
+pub mod qualification;
 pub mod repository;
 pub mod scan;
 pub mod signature;
@@ -19,6 +20,10 @@ pub use health::{HealthEvidence, RecoveryDisposition, assess_recovery};
 pub use plan::{CompilerTarget, ProvisionPlan, build_plan};
 pub use preflight::{PREFLIGHT_SCHEMA, PreflightReport, UnresolvedDevice, preflight_inventory};
 pub use profile::{HardwareProfile, ResolveError, VerifiedProfile, resolve};
+pub use qualification::{
+    CERTIFIED_SOAK_SECONDS, COMPATIBLE_SOAK_SECONDS, EvidenceKind, QUALIFICATION_SCHEMA,
+    QualificationError, QualificationEvidence, QualificationRecord, SupportLevel,
+};
 pub use repository::{
     REPOSITORY_FORMAT, RepositoryError, RepositoryManifest, RepositoryObject, sync_catalog,
     sync_catalog_with_fetcher,
