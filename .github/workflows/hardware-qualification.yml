@@ -30,7 +30,7 @@ jobs:
         with:
           components: rustfmt,clippy
       - name: Test qualification policy and retained artifacts
-        run: cargo test --locked qualification arach-hwd-qualify
+        run: cargo test --locked --all-targets
       - name: Check qualification CLI
         run: cargo check --locked --bin arach-hwd-qualify
       - name: Lint qualification paths
